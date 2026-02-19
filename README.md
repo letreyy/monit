@@ -329,3 +329,27 @@ API и интерфейсы:
 - `GET /dashboard` — теперь содержит быстрые ссылки на эти формы.
 
 То есть можно работать через браузер, не отправляя JSON вручную в Swagger/Postman.
+
+## Как работает Windows-скрипт (коротко)
+
+Да, логика именно такая: вы запускаете `scripts/windows_eventlog_agent.ps1` на Windows-сервере,
+и он **сам отправляет** события на ваш InfraMind API.
+
+Что нужно перед запуском:
+
+1. API InfraMind должен быть доступен по сети (например `http://<ip-сервера>:8050`).
+2. На Windows должна быть разрешена execution policy для скрипта (или запуск с `-ExecutionPolicy Bypass`).
+3. Указать корректный `-Api` и `-AssetId`.
+
+Пример:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -Api "http://10.10.10.20:8050" -AssetId "win-dc-01" -IntervalSec 30 -LookbackMinutes 5
+```
+
+После старта скрипт:
+
+- регистрирует asset в `/assets`;
+- циклически читает Windows EventLog (`Application` + `System`);
+- конвертирует события в общий формат;
+- отправляет батч в `/ingest/events` каждые `IntervalSec` секунд.

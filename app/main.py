@@ -15,8 +15,12 @@ from app.models import (
 )
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.6.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.7.0")
 service = MonitoringService()
+
+
+def _asset_exists(asset_id: str) -> bool:
+    return any(a.id == asset_id for a in service.list_assets())
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -41,9 +45,12 @@ def ui_assets() -> str:
     rows = []
     for asset in service.list_assets():
         rows.append(
-            f"<tr><td>{asset.id}</td><td>{asset.name}</td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td></tr>"
+            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td>"
+            f"<td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
+            f"<td><form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0'>"
+            f"<button type='submit'>Delete</button></form></td></tr>"
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='4'>No assets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
 
     return f"""
     <html><body style='font-family: Arial; max-width: 980px; margin: 2rem auto;'>
@@ -65,7 +72,7 @@ def ui_assets() -> str:
       </form>
       <h2>Registered assets</h2>
       <table border='1' cellpadding='8' cellspacing='0'>
-        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
     </body></html>
@@ -87,6 +94,51 @@ def ui_assets_submit(
     )
     service.upsert_asset(asset)
     return RedirectResponse(url="/ui/assets", status_code=303)
+
+
+@app.post("/ui/assets/{asset_id}/delete")
+def ui_asset_delete(asset_id: str) -> RedirectResponse:
+    service.delete_asset(asset_id)
+    return RedirectResponse(url="/ui/assets", status_code=303)
+
+
+@app.get("/ui/assets/{asset_id}", response_class=HTMLResponse)
+def ui_asset_detail(asset_id: str) -> str:
+    assets = [a for a in service.list_assets() if a.id == asset_id]
+    if not assets:
+        return "<html><body><h1>Asset not found</h1><a href='/ui/assets'>Back</a></body></html>"
+
+    asset = assets[0]
+    events = service.list_events(asset_id, limit=20)
+    event_rows = "".join(
+        f"<tr><td>{e.timestamp}</td><td>{e.source}</td><td>{e.severity.value}</td><td>{e.message}</td></tr>" for e in events
+    ) or "<tr><td colspan='4'>No events yet</td></tr>"
+
+    insights = service.build_correlation_insights(asset_id)
+    insights_rows = "".join(
+        f"<li><b>{i.title}</b> ({i.confidence}) — {i.recommendation}</li>" for i in insights
+    ) or "<li>No insights yet</li>"
+
+    rec = service.build_recommendation(asset_id)
+    actions = "".join(f"<li>{a}</li>" for a in rec.actions)
+
+    return f"""
+    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
+      <h1>Asset detail: {asset.id}</h1>
+      <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a></p>
+      <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
+      <h2>Recommendation</h2>
+      <p><b>Risk score:</b> {rec.risk_score} — {rec.summary}</p>
+      <ul>{actions}</ul>
+      <h2>Correlation insights</h2>
+      <ul>{insights_rows}</ul>
+      <h2>Recent events</h2>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>Timestamp</th><th>Source</th><th>Severity</th><th>Message</th></tr></thead>
+        <tbody>{event_rows}</tbody>
+      </table>
+    </body></html>
+    """
 
 
 @app.get("/ui/events", response_class=HTMLResponse)
@@ -138,7 +190,7 @@ def ui_events_submit(
         severity=Severity(severity),
     )
     service.register_event(event)
-    return RedirectResponse(url="/dashboard", status_code=303)
+    return RedirectResponse(url=f"/ui/assets/{asset_id}", status_code=303)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -150,7 +202,7 @@ def dashboard() -> str:
         insights_count = len(service.build_correlation_insights(asset.id))
         events_count = len(service.list_events(asset.id))
         rows.append(
-            f"<tr><td>{asset.id}</td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
+            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
             f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
         )
 
@@ -209,21 +261,21 @@ def register_events_batch(batch: EventBatch) -> IngestSummary:
 
 @app.get("/assets/{asset_id}/events", response_model=list[Event])
 def list_events(asset_id: str) -> list[Event]:
-    if not any(a.id == asset_id for a in service.list_assets()):
+    if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
     return service.list_events(asset_id)
 
 
 @app.get("/assets/{asset_id}/alerts", response_model=list[Alert])
 def list_alerts(asset_id: str) -> list[Alert]:
-    if not any(a.id == asset_id for a in service.list_assets()):
+    if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
     return service.build_alerts(asset_id)
 
 
 @app.get("/assets/{asset_id}/insights", response_model=list[CorrelationInsight])
 def list_insights(asset_id: str) -> list[CorrelationInsight]:
-    if not any(a.id == asset_id for a in service.list_assets()):
+    if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
     return service.build_correlation_insights(asset_id)
 

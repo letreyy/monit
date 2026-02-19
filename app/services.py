@@ -11,6 +11,9 @@ class MonitoringService:
     def upsert_asset(self, asset: Asset) -> Asset:
         return self.storage.upsert_asset(asset)
 
+    def delete_asset(self, asset_id: str) -> None:
+        self.storage.delete_asset(asset_id)
+
     def list_assets(self) -> list[Asset]:
         return self.storage.list_assets()
 
@@ -26,8 +29,8 @@ class MonitoringService:
             accepted += 1
         return accepted
 
-    def list_events(self, asset_id: str) -> list[Event]:
-        return self.storage.list_events(asset_id)
+    def list_events(self, asset_id: str, limit: int = 1000) -> list[Event]:
+        return self.storage.list_events(asset_id, limit=limit)
 
     def build_alerts(self, asset_id: str) -> list[Alert]:
         events = self.list_events(asset_id)

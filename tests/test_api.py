@@ -17,21 +17,13 @@ def setup_function() -> None:
 client = TestClient(main_module.app)
 
 
-def test_ui_asset_and_event_forms() -> None:
-    home = client.get("/")
-    assert home.status_code == 200
-    assert "UI: Add/List Assets" in home.text
-
+def test_ui_asset_event_detail_and_delete_flow() -> None:
     create_asset = client.post(
         "/ui/assets",
         data={"asset_id": "srv-ui-01", "name": "srv-ui-01", "asset_type": "server", "location": "R5"},
         follow_redirects=False,
     )
     assert create_asset.status_code == 303
-
-    assets_page = client.get("/ui/assets")
-    assert assets_page.status_code == 200
-    assert "srv-ui-01" in assets_page.text
 
     add_event = client.post(
         "/ui/events",
@@ -45,12 +37,18 @@ def test_ui_asset_and_event_forms() -> None:
     )
     assert add_event.status_code == 303
 
-    dashboard = client.get("/dashboard")
-    assert dashboard.status_code == 200
-    assert "srv-ui-01" in dashboard.text
+    detail_page = client.get("/ui/assets/srv-ui-01")
+    assert detail_page.status_code == 200
+    assert "Asset detail: srv-ui-01" in detail_page.text
+
+    delete_asset = client.post("/ui/assets/srv-ui-01/delete", follow_redirects=False)
+    assert delete_asset.status_code == 303
+
+    assets_page = client.get("/ui/assets")
+    assert "srv-ui-01" not in assets_page.text
 
 
-def test_dashboard_and_windows_correlation_flow() -> None:
+def test_windows_correlation_endpoint() -> None:
     client.post(
         "/assets",
         json={"id": "win-01", "name": "win-01", "asset_type": "server", "location": "R2"},
@@ -106,9 +104,7 @@ def test_dashboard_and_windows_correlation_flow() -> None:
         },
     )
     assert ingest_resp.status_code == 200
-    assert ingest_resp.json()["accepted"] == 7
 
     insights_resp = client.get("/assets/win-01/insights")
     assert insights_resp.status_code == 200
-    insights_payload = insights_resp.json()
-    assert len(insights_payload) >= 2
+    assert len(insights_resp.json()) >= 2

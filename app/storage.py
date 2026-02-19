@@ -60,6 +60,11 @@ class SQLiteStorage:
             )
         return asset
 
+    def delete_asset(self, asset_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM events WHERE asset_id = ?", (asset_id,))
+            conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+
     def list_assets(self) -> list[Asset]:
         with self._connect() as conn:
             rows = conn.execute("SELECT id, name, asset_type, location FROM assets ORDER BY id").fetchall()
@@ -89,7 +94,7 @@ class SQLiteStorage:
             )
         return event
 
-    def list_events(self, asset_id: str) -> list[Event]:
+    def list_events(self, asset_id: str, limit: int = 1000) -> list[Event]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -97,9 +102,9 @@ class SQLiteStorage:
                 FROM events
                 WHERE asset_id = ?
                 ORDER BY id DESC
-                LIMIT 1000
+                LIMIT ?
                 """,
-                (asset_id,),
+                (asset_id, limit),
             ).fetchall()
 
         return [Event(**dict(row)) for row in rows]
