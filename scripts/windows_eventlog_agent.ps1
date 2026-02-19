@@ -1,5 +1,5 @@
 param(
-    [string]$Api = "http://127.0.0.1:8000",
+    [string]$Api = "http://127.0.0.1:8050",
     [string]$AssetId = $env:COMPUTERNAME,
     [string]$Location = "windows-site",
     [int]$IntervalSec = 30,

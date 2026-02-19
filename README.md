@@ -157,10 +157,10 @@ InfraMind Monitor объединяет классический монитори
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 ```
 
-После запуска API доступно на `http://127.0.0.1:8000`.
+После запуска API доступно на `http://127.0.0.1:8050`.
 
 ### Основные endpoint'ы MVP
 
@@ -174,8 +174,8 @@ uvicorn app.main:app --reload
 
 Да, интерфейс уже есть в двух вариантах:
 
-1. **Swagger UI**: `http://127.0.0.1:8000/docs` — удобно вручную отправлять события/метрики.
-2. **ReDoc**: `http://127.0.0.1:8000/redoc` — документация API.
+1. **Swagger UI**: `http://127.0.0.1:8050/docs` — удобно вручную отправлять события/метрики.
+2. **ReDoc**: `http://127.0.0.1:8050/redoc` — документация API.
 
 Также добавлена стартовая web-страница `GET /` с быстрыми ссылками на интерфейсы.
 
@@ -215,7 +215,7 @@ uvicorn app.main:app --reload
 Запуск:
 
 ```bash
-python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval 30
+python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval 30
 ```
 
 Для production это можно запускать как `systemd` service/timer или DaemonSet в Kubernetes.
@@ -252,7 +252,7 @@ python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval
 Запуск на Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -Api "http://<api-host>:8000" -AssetId "win-01" -IntervalSec 30 -LookbackMinutes 5
+powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -Api "http://<api-host>:8050" -AssetId "win-01" -IntervalSec 30 -LookbackMinutes 5
 ```
 
 ### 2) Dashboard
@@ -263,3 +263,40 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 - таблица по узлам (тип, локация, кол-во событий, кол-во алертов).
 
 Это быстрый operational view до полноценного UI (React/Grafana).
+
+## Запуск на порту 8050
+
+По умолчанию проект теперь ориентирован на порт **8050**.
+
+Локальный запуск:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
+```
+
+API и интерфейсы:
+
+- `http://127.0.0.1:8050/`
+- `http://127.0.0.1:8050/docs`
+- `http://127.0.0.1:8050/dashboard`
+
+## Развёртывание через Portainer
+
+Добавлены файлы:
+
+- `Dockerfile`
+- `docker-compose.portainer.yml`
+- `.env.example`
+
+### Вариант A: Portainer Stack из Git
+
+1. В Portainer откройте **Stacks** → **Add stack**.
+2. Выберите **Repository** и укажите URL репозитория.
+3. В поле compose file path укажите: `docker-compose.portainer.yml`.
+4. Deploy stack.
+
+### Вариант B: Загрузить compose вручную
+
+Скопируйте содержимое `docker-compose.portainer.yml` в окно Stack editor и нажмите Deploy.
+
+После деплоя сервис будет доступен на `http://<host>:8050`.

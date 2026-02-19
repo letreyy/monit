@@ -2,7 +2,7 @@
 """Simple host agent that pushes metrics/log samples to InfraMind API.
 
 Usage:
-  python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval 30
+  python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval 30
 """
 
 from __future__ import annotations
@@ -98,7 +98,7 @@ def ensure_asset(api: str, asset_id: str, location: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--api", default="http://127.0.0.1:8000")
+    parser.add_argument("--api", default="http://127.0.0.1:8050")
     parser.add_argument("--asset-id", required=True)
     parser.add_argument("--location", default="unknown")
     parser.add_argument("--interval", type=int, default=30)
