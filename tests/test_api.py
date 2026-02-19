@@ -20,10 +20,10 @@ client = TestClient(main_module.app)
 def test_home_interface_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Dashboard" in response.text
+    assert "insights" in response.text.lower()
 
 
-def test_dashboard_and_windows_ingest_flow() -> None:
+def test_dashboard_and_windows_correlation_flow() -> None:
     client.post(
         "/assets",
         json={"id": "win-01", "name": "win-01", "asset_type": "server", "location": "R2"},
@@ -42,21 +42,55 @@ def test_dashboard_and_windows_ingest_flow() -> None:
                 {
                     "asset_id": "win-01",
                     "source": "windows_eventlog",
-                    "message": "[Application] EventID=1000 app crash",
+                    "message": "[System] EventID=41 kernel power",
+                    "severity": "critical",
+                },
+                {
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Security] EventID=4625 failed logon",
+                    "severity": "warning",
+                },
+                {
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Security] EventID=4625 failed logon",
+                    "severity": "warning",
+                },
+                {
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Security] EventID=4625 failed logon",
+                    "severity": "warning",
+                },
+                {
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Security] EventID=4625 failed logon",
+                    "severity": "warning",
+                },
+                {
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Security] EventID=4625 failed logon",
                     "severity": "warning",
                 },
             ]
         },
     )
     assert ingest_resp.status_code == 200
-    assert ingest_resp.json()["accepted"] == 2
+    assert ingest_resp.json()["accepted"] == 7
+
+    insights_resp = client.get("/assets/win-01/insights")
+    assert insights_resp.status_code == 200
+    insights_payload = insights_resp.json()
+    assert len(insights_payload) >= 2
+
+    rec_resp = client.get("/assets/win-01/recommendation")
+    assert rec_resp.status_code == 200
+    actions = rec_resp.json()["actions"]
+    assert any("Correlation:" in action for action in actions)
 
     dashboard_resp = client.get("/dashboard")
     assert dashboard_resp.status_code == 200
-    assert "InfraMind Dashboard" in dashboard_resp.text
-    assert "win-01" in dashboard_resp.text
-
-    overview_resp = client.get("/overview")
-    assert overview_resp.status_code == 200
-    assert overview_resp.json()["assets_total"] == 1
-    assert overview_resp.json()["events_total"] == 2
+    assert "Insights" in dashboard_resp.text

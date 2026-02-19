@@ -59,3 +59,11 @@ class Overview(BaseModel):
     assets_total: int
     events_total: int
     critical_assets: int
+
+
+class CorrelationInsight(BaseModel):
+    asset_id: str
+    title: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    evidence_count: int = Field(..., ge=1)
+    recommendation: str

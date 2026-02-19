@@ -1,10 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
-from app.models import Alert, Asset, Event, EventBatch, IngestSummary, Overview, Recommendation
+from app.models import (
+    Alert,
+    Asset,
+    CorrelationInsight,
+    Event,
+    EventBatch,
+    IngestSummary,
+    Overview,
+    Recommendation,
+)
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.4.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.5.0")
 service = MonitoringService()
 
 
@@ -18,7 +27,7 @@ def home() -> str:
         <li><a href='/redoc'>ReDoc</a></li>
         <li><a href='/dashboard'>Dashboard</a></li>
       </ul>
-      <p>New: Windows Event Log collector script: <code>scripts/windows_eventlog_agent.ps1</code>.</p>
+      <p>New: correlation insights API <code>GET /assets/{asset_id}/insights</code>.</p>
     </body></html>
     """
 
@@ -29,20 +38,21 @@ def dashboard() -> str:
     rows = []
     for asset in service.list_assets():
         alerts_count = len(service.build_alerts(asset.id))
+        insights_count = len(service.build_correlation_insights(asset.id))
         events_count = len(service.list_events(asset.id))
         rows.append(
             f"<tr><td>{asset.id}</td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td>{events_count}</td><td>{alerts_count}</td></tr>"
+            f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
         )
 
-    rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='6'>No assets yet</td></tr>"
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <table border='1' cellpadding='8' cellspacing='0'>
-        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th></tr></thead>
+        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
     </body></html>
@@ -99,6 +109,13 @@ def list_alerts(asset_id: str) -> list[Alert]:
     if not any(a.id == asset_id for a in service.list_assets()):
         raise HTTPException(status_code=404, detail="Asset not found")
     return service.build_alerts(asset_id)
+
+
+@app.get("/assets/{asset_id}/insights", response_model=list[CorrelationInsight])
+def list_insights(asset_id: str) -> list[CorrelationInsight]:
+    if not any(a.id == asset_id for a in service.list_assets()):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return service.build_correlation_insights(asset_id)
 
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
