@@ -353,3 +353,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 - циклически читает Windows EventLog (`Application` + `System`);
 - конвертирует события в общий формат;
 - отправляет батч в `/ingest/events` каждые `IntervalSec` секунд.
+
+### Частая ошибка после redeploy в Portainer
+
+Если в логах видите ошибку:
+
+`RuntimeError: Form data requires "python-multipart" to be installed`
+
+это означает, что контейнер был собран без зависимости для `Form(...)` endpoint'ов FastAPI.
+
+В проект уже добавлена зависимость `python-multipart` в `requirements.txt`.
+
+Что сделать:
+
+1. В Portainer откройте Stack.
+2. Нажмите **Pull and redeploy** (или **Recreate**) с пересборкой образа.
+3. Убедитесь, что новый контейнер поднялся без этой ошибки.
