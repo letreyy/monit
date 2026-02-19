@@ -19,6 +19,13 @@ class MonitoringService:
         self.events[event.asset_id].append(event)
         return event
 
+    def register_events_batch(self, events: list[Event]) -> int:
+        accepted = 0
+        for event in events:
+            self.register_event(event)
+            accepted += 1
+        return accepted
+
     def list_events(self, asset_id: str) -> list[Event]:
         return self.events.get(asset_id, [])
 

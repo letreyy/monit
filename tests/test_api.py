@@ -11,6 +11,12 @@ def setup_function() -> None:
     service.events.clear()
 
 
+def test_home_interface_page() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Swagger UI" in response.text
+
+
 def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
@@ -30,7 +36,7 @@ def test_register_event_requires_existing_asset() -> None:
     assert response.status_code == 404
 
 
-def test_recommendation_flow() -> None:
+def test_batch_ingest_and_recommendation_flow() -> None:
     asset_payload = {
         "id": "srv-db-03",
         "name": "DB node",
@@ -40,32 +46,34 @@ def test_recommendation_flow() -> None:
     response = client.post("/assets", json=asset_payload)
     assert response.status_code == 200
 
-    events = [
-        {
-            "asset_id": "srv-db-03",
-            "source": "linux",
-            "message": "iowait spike",
-            "metric": "iowait",
-            "value": 29,
-            "severity": "warning",
-        },
-        {
-            "asset_id": "srv-db-03",
-            "source": "idrac",
-            "message": "thermal warning on inlet",
-            "severity": "critical",
-        },
-        {
-            "asset_id": "srv-db-03",
-            "source": "smart",
-            "message": "SMART reallocated sector count increased",
-            "severity": "critical",
-        },
-    ]
+    batch = {
+        "events": [
+            {
+                "asset_id": "srv-db-03",
+                "source": "linux",
+                "message": "iowait spike",
+                "metric": "iowait",
+                "value": 29,
+                "severity": "warning",
+            },
+            {
+                "asset_id": "srv-db-03",
+                "source": "idrac",
+                "message": "thermal warning on inlet",
+                "severity": "critical",
+            },
+            {
+                "asset_id": "srv-db-03",
+                "source": "smart",
+                "message": "SMART reallocated sector count increased",
+                "severity": "critical",
+            },
+        ]
+    }
 
-    for event in events:
-        event_resp = client.post("/events", json=event)
-        assert event_resp.status_code == 200
+    ingest_resp = client.post("/ingest/events", json=batch)
+    assert ingest_resp.status_code == 200
+    assert ingest_resp.json()["accepted"] == 3
 
     rec_resp = client.get("/assets/srv-db-03/recommendation")
     assert rec_resp.status_code == 200

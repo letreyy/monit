@@ -1,10 +1,30 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
-from app.models import Asset, Event, Recommendation
+from app.models import Asset, Event, EventBatch, IngestSummary, Recommendation
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.1.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.2.0")
 service = MonitoringService()
+
+
+@app.get("/", response_class=HTMLResponse)
+def home() -> str:
+    return """
+    <html>
+      <head><title>InfraMind Monitor</title></head>
+      <body style='font-family: Arial; max-width: 800px; margin: 2rem auto;'>
+        <h1>InfraMind Monitor</h1>
+        <p>Мини-интерфейс уже есть:</p>
+        <ul>
+          <li><a href='/docs'>Swagger UI</a> — интерактивное API-тестирование</li>
+          <li><a href='/redoc'>ReDoc</a> — документация схем</li>
+        </ul>
+        <p>Для автоматического сбора логов/метрик используйте endpoint <code>POST /ingest/events</code>
+        и агент из <code>scripts/agent.py</code>.</p>
+      </body>
+    </html>
+    """
 
 
 @app.get("/health")
@@ -23,6 +43,16 @@ def register_event(event: Event) -> Event:
         return service.register_event(event)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/ingest/events", response_model=IngestSummary)
+def register_events_batch(batch: EventBatch) -> IngestSummary:
+    try:
+        accepted = service.register_events_batch(batch.events)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return IngestSummary(accepted=accepted)
 
 
 @app.get("/assets/{asset_id}/events", response_model=list[Event])

@@ -169,3 +169,53 @@ uvicorn app.main:app --reload
 - `POST /events`
 - `GET /assets/{asset_id}/events`
 - `GET /assets/{asset_id}/recommendation`
+
+## Интерфейс и автосбор данных
+
+Да, интерфейс уже есть в двух вариантах:
+
+1. **Swagger UI**: `http://127.0.0.1:8000/docs` — удобно вручную отправлять события/метрики.
+2. **ReDoc**: `http://127.0.0.1:8000/redoc` — документация API.
+
+Также добавлена стартовая web-страница `GET /` с быстрыми ссылками на интерфейсы.
+
+### Как добавлять логи и метрики автоматически
+
+Для агентов добавлен batch endpoint:
+
+- `POST /ingest/events`
+
+Формат payload:
+
+```json
+{
+  "events": [
+    {
+      "asset_id": "srv-01",
+      "source": "agent",
+      "message": "root fs usage",
+      "metric": "disk_used_pct",
+      "value": 72.5,
+      "severity": "info",
+      "timestamp": "2026-02-19T14:00:00Z"
+    }
+  ]
+}
+```
+
+### Готовый пример агента
+
+В репозитории добавлен `scripts/agent.py`, который:
+
+- регистрирует asset (если ещё не добавлен);
+- периодически читает системные метрики (`/proc/loadavg`, usage диска `/`);
+- читает последние строки системного лога (`/var/log/syslog` или другой файл);
+- отправляет всё в `POST /ingest/events`.
+
+Запуск:
+
+```bash
+python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval 30
+```
+
+Для production это можно запускать как `systemd` service/timer или DaemonSet в Kubernetes.

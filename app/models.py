@@ -34,6 +34,14 @@ class Event(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
+class EventBatch(BaseModel):
+    events: list[Event]
+
+
+class IngestSummary(BaseModel):
+    accepted: int
+
+
 class Recommendation(BaseModel):
     asset_id: str
     risk_score: float = Field(..., ge=0.0, le=1.0)
