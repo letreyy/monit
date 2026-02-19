@@ -4,20 +4,47 @@ from fastapi.responses import HTMLResponse
 from app.models import Alert, Asset, Event, EventBatch, IngestSummary, Overview, Recommendation
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.3.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.4.0")
 service = MonitoringService()
 
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return """
-    <html><body style='font-family: Arial; max-width: 800px; margin: 2rem auto;'>
+    <html><body style='font-family: Arial; max-width: 860px; margin: 2rem auto;'>
       <h1>InfraMind Monitor</h1>
       <ul>
         <li><a href='/docs'>Swagger UI</a></li>
         <li><a href='/redoc'>ReDoc</a></li>
+        <li><a href='/dashboard'>Dashboard</a></li>
       </ul>
-      <p>New: <code>GET /overview</code> и <code>GET /assets/{asset_id}/alerts</code>.</p>
+      <p>New: Windows Event Log collector script: <code>scripts/windows_eventlog_agent.ps1</code>.</p>
+    </body></html>
+    """
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    overview_data = service.overview()
+    rows = []
+    for asset in service.list_assets():
+        alerts_count = len(service.build_alerts(asset.id))
+        events_count = len(service.list_events(asset.id))
+        rows.append(
+            f"<tr><td>{asset.id}</td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
+            f"<td>{events_count}</td><td>{alerts_count}</td></tr>"
+        )
+
+    rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
+    return f"""
+    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
+      <h1>InfraMind Dashboard</h1>
+      <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
+      Critical assets: <b>{overview_data['critical_assets']}</b></p>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
     </body></html>
     """
 

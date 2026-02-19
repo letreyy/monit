@@ -20,13 +20,13 @@ client = TestClient(main_module.app)
 def test_home_interface_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "Swagger UI" in response.text
+    assert "Dashboard" in response.text
 
 
-def test_overview_and_batch_flow() -> None:
+def test_dashboard_and_windows_ingest_flow() -> None:
     client.post(
         "/assets",
-        json={"id": "srv-01", "name": "srv-01", "asset_type": "server", "location": "R1"},
+        json={"id": "win-01", "name": "win-01", "asset_type": "server", "location": "R2"},
     )
 
     ingest_resp = client.post(
@@ -34,17 +34,15 @@ def test_overview_and_batch_flow() -> None:
         json={
             "events": [
                 {
-                    "asset_id": "srv-01",
-                    "source": "linux",
-                    "message": "thermal critical",
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[System] EventID=6008 unexpected shutdown",
                     "severity": "critical",
                 },
                 {
-                    "asset_id": "srv-01",
-                    "source": "linux",
-                    "message": "iowait spike",
-                    "metric": "iowait",
-                    "value": 30,
+                    "asset_id": "win-01",
+                    "source": "windows_eventlog",
+                    "message": "[Application] EventID=1000 app crash",
                     "severity": "warning",
                 },
             ]
@@ -53,9 +51,10 @@ def test_overview_and_batch_flow() -> None:
     assert ingest_resp.status_code == 200
     assert ingest_resp.json()["accepted"] == 2
 
-    alerts_resp = client.get("/assets/srv-01/alerts")
-    assert alerts_resp.status_code == 200
-    assert len(alerts_resp.json()) >= 1
+    dashboard_resp = client.get("/dashboard")
+    assert dashboard_resp.status_code == 200
+    assert "InfraMind Dashboard" in dashboard_resp.text
+    assert "win-01" in dashboard_resp.text
 
     overview_resp = client.get("/overview")
     assert overview_resp.status_code == 200

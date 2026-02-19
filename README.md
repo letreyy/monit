@@ -230,3 +230,36 @@ python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval
 - добавлен `GET /overview` для сводки (кол-во assets, событий и критичных узлов).
 
 Это приближает платформу к операционному режиму: данные сохраняются между перезапусками API и уже есть базовый “операционный” обзор состояния.
+
+## Следующий шаг: Windows Event Log + dashboard
+
+Идём по плану дальше и закрываем два направления сразу:
+
+1. **Сбор логов из Windows**
+2. **Базовый дашборд для оператора**
+
+### 1) Windows Event Log collection
+
+Добавлен скрипт: `scripts/windows_eventlog_agent.ps1`.
+
+Что делает:
+
+- регистрирует Windows-host как asset в API;
+- читает события из `Application` и `System` за последние N минут;
+- нормализует уровень критичности (`info/warning/critical`);
+- отправляет пачку событий в `POST /ingest/events`.
+
+Запуск на Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -Api "http://<api-host>:8000" -AssetId "win-01" -IntervalSec 30 -LookbackMinutes 5
+```
+
+### 2) Dashboard
+
+Добавлен endpoint `GET /dashboard` — простой HTML-дашборд:
+
+- общая сводка (assets/events/critical assets),
+- таблица по узлам (тип, локация, кол-во событий, кол-во алертов).
+
+Это быстрый operational view до полноценного UI (React/Grafana).
