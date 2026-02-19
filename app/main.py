@@ -1,35 +1,144 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.models import (
     Alert,
     Asset,
+    AssetType,
     CorrelationInsight,
     Event,
     EventBatch,
     IngestSummary,
     Overview,
     Recommendation,
+    Severity,
 )
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.5.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.6.0")
 service = MonitoringService()
 
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return """
-    <html><body style='font-family: Arial; max-width: 860px; margin: 2rem auto;'>
+    <html><body style='font-family: Arial; max-width: 920px; margin: 2rem auto;'>
       <h1>InfraMind Monitor</h1>
       <ul>
+        <li><a href='/dashboard'>Dashboard</a></li>
+        <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
+        <li><a href='/ui/events'>UI: Add Event</a></li>
         <li><a href='/docs'>Swagger UI</a></li>
         <li><a href='/redoc'>ReDoc</a></li>
-        <li><a href='/dashboard'>Dashboard</a></li>
       </ul>
-      <p>New: correlation insights API <code>GET /assets/{asset_id}/insights</code>.</p>
+      <p>Now you can manage assets/events via web forms, not only API.</p>
     </body></html>
     """
+
+
+@app.get("/ui/assets", response_class=HTMLResponse)
+def ui_assets() -> str:
+    rows = []
+    for asset in service.list_assets():
+        rows.append(
+            f"<tr><td>{asset.id}</td><td>{asset.name}</td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td></tr>"
+        )
+    rows_html = "".join(rows) if rows else "<tr><td colspan='4'>No assets yet</td></tr>"
+
+    return f"""
+    <html><body style='font-family: Arial; max-width: 980px; margin: 2rem auto;'>
+      <h1>Assets</h1>
+      <p><a href='/dashboard'>← Dashboard</a></p>
+      <form method='post' action='/ui/assets'>
+        <label>ID <input name='asset_id' required /></label><br/><br/>
+        <label>Name <input name='name' required /></label><br/><br/>
+        <label>Type
+          <select name='asset_type'>
+            <option value='server'>server</option>
+            <option value='storage_shelf'>storage_shelf</option>
+            <option value='network'>network</option>
+            <option value='bmc'>bmc</option>
+          </select>
+        </label><br/><br/>
+        <label>Location <input name='location' /></label><br/><br/>
+        <button type='submit'>Save asset</button>
+      </form>
+      <h2>Registered assets</h2>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </body></html>
+    """
+
+
+@app.post("/ui/assets")
+def ui_assets_submit(
+    asset_id: str = Form(...),
+    name: str = Form(...),
+    asset_type: str = Form(...),
+    location: str = Form(""),
+) -> RedirectResponse:
+    asset = Asset(
+        id=asset_id.strip(),
+        name=name.strip(),
+        asset_type=AssetType(asset_type),
+        location=location.strip() or None,
+    )
+    service.upsert_asset(asset)
+    return RedirectResponse(url="/ui/assets", status_code=303)
+
+
+@app.get("/ui/events", response_class=HTMLResponse)
+def ui_events() -> str:
+    options = "".join(f"<option value='{a.id}'>{a.id} ({a.name})</option>" for a in service.list_assets())
+    if not options:
+        options = "<option value=''>No assets. Create one first.</option>"
+
+    return f"""
+    <html><body style='font-family: Arial; max-width: 980px; margin: 2rem auto;'>
+      <h1>Add Event</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
+      <form method='post' action='/ui/events'>
+        <label>Asset
+          <select name='asset_id' required>{options}</select>
+        </label><br/><br/>
+        <label>Source <input name='source' value='manual_ui' required /></label><br/><br/>
+        <label>Message <input name='message' required style='min-width:420px'/></label><br/><br/>
+        <label>Metric <input name='metric' placeholder='optional'/></label><br/><br/>
+        <label>Value <input name='value' type='number' step='0.01' placeholder='optional'/></label><br/><br/>
+        <label>Severity
+          <select name='severity'>
+            <option value='info'>info</option>
+            <option value='warning'>warning</option>
+            <option value='critical'>critical</option>
+          </select>
+        </label><br/><br/>
+        <button type='submit'>Send event</button>
+      </form>
+    </body></html>
+    """
+
+
+@app.post("/ui/events")
+def ui_events_submit(
+    asset_id: str = Form(...),
+    source: str = Form(...),
+    message: str = Form(...),
+    metric: str = Form(""),
+    value: str = Form(""),
+    severity: str = Form("info"),
+) -> RedirectResponse:
+    event = Event(
+        asset_id=asset_id.strip(),
+        source=source.strip(),
+        message=message.strip(),
+        metric=metric.strip() or None,
+        value=float(value) if value.strip() else None,
+        severity=Severity(severity),
+    )
+    service.register_event(event)
+    return RedirectResponse(url="/dashboard", status_code=303)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -49,6 +158,7 @@ def dashboard() -> str:
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <table border='1' cellpadding='8' cellspacing='0'>

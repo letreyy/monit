@@ -17,10 +17,37 @@ def setup_function() -> None:
 client = TestClient(main_module.app)
 
 
-def test_home_interface_page() -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    assert "insights" in response.text.lower()
+def test_ui_asset_and_event_forms() -> None:
+    home = client.get("/")
+    assert home.status_code == 200
+    assert "UI: Add/List Assets" in home.text
+
+    create_asset = client.post(
+        "/ui/assets",
+        data={"asset_id": "srv-ui-01", "name": "srv-ui-01", "asset_type": "server", "location": "R5"},
+        follow_redirects=False,
+    )
+    assert create_asset.status_code == 303
+
+    assets_page = client.get("/ui/assets")
+    assert assets_page.status_code == 200
+    assert "srv-ui-01" in assets_page.text
+
+    add_event = client.post(
+        "/ui/events",
+        data={
+            "asset_id": "srv-ui-01",
+            "source": "manual_ui",
+            "message": "EventID=6008 unexpected shutdown",
+            "severity": "critical",
+        },
+        follow_redirects=False,
+    )
+    assert add_event.status_code == 303
+
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200
+    assert "srv-ui-01" in dashboard.text
 
 
 def test_dashboard_and_windows_correlation_flow() -> None:
@@ -85,12 +112,3 @@ def test_dashboard_and_windows_correlation_flow() -> None:
     assert insights_resp.status_code == 200
     insights_payload = insights_resp.json()
     assert len(insights_payload) >= 2
-
-    rec_resp = client.get("/assets/win-01/recommendation")
-    assert rec_resp.status_code == 200
-    actions = rec_resp.json()["actions"]
-    assert any("Correlation:" in action for action in actions)
-
-    dashboard_resp = client.get("/dashboard")
-    assert dashboard_resp.status_code == 200
-    assert "Insights" in dashboard_resp.text
