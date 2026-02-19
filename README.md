@@ -219,3 +219,14 @@ python scripts/agent.py --api http://127.0.0.1:8000 --asset-id srv-01 --interval
 ```
 
 Для production это можно запускать как `systemd` service/timer или DaemonSet в Kubernetes.
+
+## Что сделали дальше по плану
+
+Следующий шаг MVP реализован:
+
+- добавлено **персистентное хранение** в SQLite (`app/storage.py`) вместо только in-memory состояния;
+- добавлен `GET /assets` для просмотра подключённых объектов;
+- добавлен `GET /assets/{asset_id}/alerts` для rule-based алертов (iowait/thermal/SMART);
+- добавлен `GET /overview` для сводки (кол-во assets, событий и критичных узлов).
+
+Это приближает платформу к операционному режиму: данные сохраняются между перезапусками API и уже есть базовый “операционный” обзор состояния.

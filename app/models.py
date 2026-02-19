@@ -47,3 +47,15 @@ class Recommendation(BaseModel):
     risk_score: float = Field(..., ge=0.0, le=1.0)
     summary: str
     actions: list[str]
+
+
+class Alert(BaseModel):
+    asset_id: str
+    severity: Severity
+    reason: str
+
+
+class Overview(BaseModel):
+    assets_total: int
+    events_total: int
+    critical_assets: int

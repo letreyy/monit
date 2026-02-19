@@ -1,35 +1,40 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 
-from app.models import Asset, Event, EventBatch, IngestSummary, Recommendation
+from app.models import Alert, Asset, Event, EventBatch, IngestSummary, Overview, Recommendation
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.2.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.3.0")
 service = MonitoringService()
 
 
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return """
-    <html>
-      <head><title>InfraMind Monitor</title></head>
-      <body style='font-family: Arial; max-width: 800px; margin: 2rem auto;'>
-        <h1>InfraMind Monitor</h1>
-        <p>Мини-интерфейс уже есть:</p>
-        <ul>
-          <li><a href='/docs'>Swagger UI</a> — интерактивное API-тестирование</li>
-          <li><a href='/redoc'>ReDoc</a> — документация схем</li>
-        </ul>
-        <p>Для автоматического сбора логов/метрик используйте endpoint <code>POST /ingest/events</code>
-        и агент из <code>scripts/agent.py</code>.</p>
-      </body>
-    </html>
+    <html><body style='font-family: Arial; max-width: 800px; margin: 2rem auto;'>
+      <h1>InfraMind Monitor</h1>
+      <ul>
+        <li><a href='/docs'>Swagger UI</a></li>
+        <li><a href='/redoc'>ReDoc</a></li>
+      </ul>
+      <p>New: <code>GET /overview</code> и <code>GET /assets/{asset_id}/alerts</code>.</p>
+    </body></html>
     """
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/overview", response_model=Overview)
+def overview() -> Overview:
+    return Overview(**service.overview())
+
+
+@app.get("/assets", response_model=list[Asset])
+def list_assets() -> list[Asset]:
+    return service.list_assets()
 
 
 @app.post("/assets", response_model=Asset)
@@ -57,9 +62,16 @@ def register_events_batch(batch: EventBatch) -> IngestSummary:
 
 @app.get("/assets/{asset_id}/events", response_model=list[Event])
 def list_events(asset_id: str) -> list[Event]:
-    if asset_id not in service.assets:
+    if not any(a.id == asset_id for a in service.list_assets()):
         raise HTTPException(status_code=404, detail="Asset not found")
     return service.list_events(asset_id)
+
+
+@app.get("/assets/{asset_id}/alerts", response_model=list[Alert])
+def list_alerts(asset_id: str) -> list[Alert]:
+    if not any(a.id == asset_id for a in service.list_assets()):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return service.build_alerts(asset_id)
 
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
