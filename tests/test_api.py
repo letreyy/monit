@@ -405,3 +405,19 @@ def test_snmp_pull_uses_oids_with_mock() -> None:
     assert rows[0]["metric"].startswith("snmp_")
     assert rows[0]["value"] is not None
 
+
+
+def test_worker_health_endpoint() -> None:
+    resp = client.get("/worker/health")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "status" in payload
+    assert "tracked" in payload
+    assert "failed" in payload
+
+
+def test_dashboard_includes_worker_health_widget() -> None:
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "Worker health:" in resp.text
+    assert "/worker/health" in resp.text

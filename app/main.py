@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -21,7 +22,6 @@ from app.models import (
 from app.services import MonitoringService
 from app.worker import AgentlessWorker
 
-app = FastAPI(title="InfraMind Monitor API", version="0.8.0")
 service = MonitoringService()
 WORKER_TICK_SEC = float(os.getenv("WORKER_TICK_SEC", "2"))
 WORKER_TIMEOUT_SEC = float(os.getenv("WORKER_TIMEOUT_SEC", "2"))
@@ -29,15 +29,17 @@ worker = AgentlessWorker(service, tick_sec=WORKER_TICK_SEC, timeout_sec=WORKER_T
 ENABLE_AGENTLESS_WORKER = os.getenv("ENABLE_AGENTLESS_WORKER", "1") == "1"
 
 
-@app.on_event("startup")
-def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     if ENABLE_AGENTLESS_WORKER:
         worker.start()
+    try:
+        yield
+    finally:
+        worker.stop()
 
 
-@app.on_event("shutdown")
-def shutdown_event() -> None:
-    worker.stop()
+app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
 
 
 def _asset_exists(asset_id: str) -> bool:
@@ -346,9 +348,33 @@ def ui_events_submit(
     return RedirectResponse(url=f"/ui/assets/{asset_id}", status_code=303)
 
 
+def _worker_health_snapshot() -> dict[str, int | str | bool]:
+    status = worker.status()
+    targets = worker.target_status()
+    failed = sum(1 for t in targets if not t.get("last_ok", False) and t.get("last_run_ts") is not None)
+    stale = sum(1 for t in targets if t.get("last_run_ts") is None)
+    return {
+        "running": status.get("running", False),
+        "enabled": ENABLE_AGENTLESS_WORKER,
+        "tracked": len(targets),
+        "failed": failed,
+        "stale": stale,
+        "cycle_count": int(status.get("cycle_count", 0)),
+    }
+
+
+@app.get("/worker/health")
+def worker_health() -> dict[str, int | str | bool]:
+    snap = _worker_health_snapshot()
+    snap["status"] = "ok" if snap["running"] else "degraded"
+    return snap
+
+
+
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
     overview_data = service.overview()
+    worker_health_data = _worker_health_snapshot()
     rows = []
     for asset in service.list_assets():
         alerts_count = len(service.build_alerts(asset.id))
@@ -366,6 +392,15 @@ def dashboard() -> str:
       <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
+      <div style='padding: 12px; border: 1px solid #ccc; margin: 12px 0; background: #f9f9f9;'>
+        <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'}
+        | enabled: {worker_health_data['enabled']}
+        | tracked: {worker_health_data['tracked']}
+        | failed: {worker_health_data['failed']}
+        | stale: {worker_health_data['stale']}
+        | cycles: {worker_health_data['cycle_count']}
+        | <a href='/worker/health'>JSON</a>
+      </div>
       <table border='1' cellpadding='8' cellspacing='0'>
         <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
         <tbody>{rows_html}</tbody>

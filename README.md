@@ -577,3 +577,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: **миграция lifecycle на FastAPI lifespan** (вместо deprecated `@app.on_event`) и добавление health-диагностики по воркеру/коллекторам в отдельном статус-виджете.
+
+## Следующий шаг (реализовано): FastAPI lifespan + worker health diagnostics
+
+Сделали следующий шаг по плану для стабилизации runtime и наблюдаемости:
+
+- lifecycle приложения переведён на `lifespan` (вместо deprecated `@app.on_event`);
+- добавлен endpoint `GET /worker/health` с агрегированным состоянием worker (`running`, `tracked`, `failed`, `stale`, `cycle_count`);
+- в `/dashboard` добавлен status-widget по worker health с быстрым переходом на JSON-диагностику.
+
+### Что дальше по плану
+
+Следующий шаг: добавить lightweight history/тренды по worker health (например, последние N циклов с ошибками по target) и вывести это в отдельной UI-странице диагностики collector'ов.
