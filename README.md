@@ -617,3 +617,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: добавить графики/агрегации по истории (ошибки/успехи/accepted events по времени) и экспорт диагностики (CSV/JSON dump) из UI.
+
+## Следующий шаг (реализовано): графики/агрегации + CSV export в diagnostics
+
+Выполнен следующий шаг:
+
+- в `GET /ui/diagnostics` добавлены агрегаты (`runs/ok/errors/accepted_events_sum`);
+- добавлены lightweight-графики:
+  - bar по ошибкам/успехам в разрезе collector type,
+  - trend line по `accepted_events`;
+- добавлен экспорт `GET /worker/history.csv` с фильтрами `target_id`, `collector_type`, `has_error`;
+- на UI добавлена ссылка на скачивание отфильтрованного CSV.
+
+### Что дальше по плану
+
+Следующий шаг: вынести diagnostics view на отдельные data endpoints для фронтенда (JSON агрегации/таймсерии) и добавить автообновление виджета без перезагрузки страницы.

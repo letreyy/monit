@@ -466,6 +466,8 @@ def test_ui_diagnostics_page() -> None:
     assert "Worker diagnostics" in resp.text
     assert "/worker/history" in resp.text
     assert "Apply" in resp.text
+    assert "Summary:" in resp.text
+    assert "Download filtered CSV" in resp.text
 
 
 def test_worker_history_persists_in_storage() -> None:
@@ -499,3 +501,34 @@ def test_worker_history_persists_in_storage() -> None:
 
     if db_path.exists():
         db_path.unlink()
+
+
+def test_worker_history_csv_export() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-csv", "name": "srv-csv", "asset_type": "server", "location": "R8"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-csv",
+            "name": "CSV target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-csv",
+        },
+    )
+
+    client.post("/worker/run-once")
+
+    csv_resp = client.get("/worker/history.csv?target_id=col-csv&collector_type=ssh")
+    assert csv_resp.status_code == 200
+    assert "text/plain" in csv_resp.headers["content-type"]
+    assert "ts,target_id,collector_type,accepted_events" in csv_resp.text
+    assert "\"col-csv\"" in csv_resp.text
+

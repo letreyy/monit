@@ -2,7 +2,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from app.models import (
     Alert,
@@ -386,6 +386,41 @@ def worker_history(
     )
 
 
+@app.get("/worker/history.csv", response_class=PlainTextResponse)
+def worker_history_csv(
+    limit: int = 200,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: bool | None = None,
+) -> str:
+    rows = worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error,
+    )
+    header = "ts,target_id,collector_type,accepted_events,failure_streak,last_cursor,last_error"
+
+    def esc(v: str) -> str:
+        return '"' + v.replace('"', '""') + '"'
+
+    lines = [header]
+    for r in rows:
+        line = ",".join(
+            [
+                esc(str(r.get("ts", ""))),
+                esc(str(r.get("target_id", ""))),
+                esc(str(r.get("collector_type", ""))),
+                str(r.get("accepted_events", 0)),
+                str(r.get("failure_streak", 0)),
+                esc(str(r.get("last_cursor") or "")),
+                esc(str(r.get("last_error") or "")),
+            ]
+        )
+        lines.append(line)
+    return "\n".join(lines)
+
+
 @app.get("/ui/diagnostics", response_class=HTMLResponse)
 def ui_diagnostics(
     target_id: str = "",
@@ -412,10 +447,58 @@ def ui_diagnostics(
             f"<td>{row.get('last_error') or '-'}</td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
+
+    total = len(history)
+    errors = sum(1 for r in history if r.get("last_error"))
+    ok = total - errors
+    accepted_sum = sum(int(r.get("accepted_events", 0)) for r in history)
+
+    by_type: dict[str, dict[str, int]] = {}
+    for r in history:
+        ctype = str(r.get("collector_type", "unknown"))
+        bucket = by_type.setdefault(ctype, {"ok": 0, "err": 0})
+        if r.get("last_error"):
+            bucket["err"] += 1
+        else:
+            bucket["ok"] += 1
+
+    bars = []
+    max_total = max((v["ok"] + v["err"] for v in by_type.values()), default=1)
+    for ctype, v in sorted(by_type.items()):
+        width = int(((v["ok"] + v["err"]) / max_total) * 240)
+        bars.append(
+            f"<div><b>{ctype}</b> ok={v['ok']} err={v['err']}<div style='background:#ddd;width:240px;height:12px'>"
+            f"<div style='background:{'#d9534f' if v['err'] else '#5cb85c'};width:{width}px;height:12px'></div></div></div>"
+        )
+    bars_html = "".join(bars) or "<i>No data for chart</i>"
+
+    trend_points = []
+    trend_values = [int(r.get("accepted_events", 0)) for r in history[::-1]]
+    max_val = max(trend_values, default=1)
+    for i, val in enumerate(trend_values):
+        x = 10 + i * 14
+        y = 70 - int((val / max_val) * 60) if max_val else 70
+        trend_points.append(f"{x},{y}")
+    poly = " ".join(trend_points)
+    trend_svg = (
+        f"<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'>"
+        f"<polyline points='{poly}' fill='none' stroke='#337ab7' stroke-width='2' />"
+        f"</svg>"
+        if trend_points
+        else "<i>No trend data</i>"
+    )
+
     return f"""
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
       <h1>Worker diagnostics</h1>
-      <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a></p>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
+      <div style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
+        <b>Summary:</b> runs={total}, ok={ok}, errors={errors}, accepted_events_sum={accepted_sum}
+      </div>
+      <h3>Errors by collector type</h3>
+      {bars_html}
+      <h3>Accepted events trend</h3>
+      {trend_svg}
       <form method='get' action='/ui/diagnostics' style='margin: 10px 0;'>
         <label>Target ID <input name='target_id' value='{target_id}' /></label>
         <label>Type
@@ -435,6 +518,7 @@ def ui_diagnostics(
         </label>
         <button type='submit'>Apply</button>
       </form>
+      <p><a href='/worker/history.csv?target_id={target_id}&collector_type={collector_type}&has_error={has_error}'>Download filtered CSV</a></p>
       <table border='1' cellpadding='8' cellspacing='0'>
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
         <tbody>{rows_html}</tbody>
