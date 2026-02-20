@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.services import MonitoringService
 from app.storage import SQLiteStorage
+from app.worker import AgentlessWorker
 
 
 def setup_function() -> None:
@@ -12,6 +13,7 @@ def setup_function() -> None:
     if db_path.exists():
         db_path.unlink()
     main_module.service = MonitoringService(SQLiteStorage(str(db_path)))
+    main_module.worker = AgentlessWorker(main_module.service)
 
 
 client = TestClient(main_module.app)
@@ -75,3 +77,33 @@ def test_windows_correlation_endpoint() -> None:
     insights_resp = client.get("/assets/win-01/insights")
     assert insights_resp.status_code == 200
     assert len(insights_resp.json()) >= 2
+
+
+def test_worker_run_once_generates_agentless_event() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-worker", "name": "srv-worker", "asset_type": "server", "location": "R3"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-worker",
+            "name": "Worker target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-worker"
+        },
+    )
+
+    run_resp = client.post("/worker/run-once")
+    assert run_resp.status_code == 200
+    assert run_resp.json()["accepted"] >= 1
+
+    events_resp = client.get("/assets/srv-worker/events")
+    assert events_resp.status_code == 200
+    assert any(e["source"].startswith("agentless_") for e in events_resp.json())

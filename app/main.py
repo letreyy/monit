@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -16,9 +18,23 @@ from app.models import (
     Severity,
 )
 from app.services import MonitoringService
+from app.worker import AgentlessWorker
 
 app = FastAPI(title="InfraMind Monitor API", version="0.8.0")
 service = MonitoringService()
+worker = AgentlessWorker(service)
+ENABLE_AGENTLESS_WORKER = os.getenv("ENABLE_AGENTLESS_WORKER", "1") == "1"
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    if ENABLE_AGENTLESS_WORKER:
+        worker.start()
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    worker.stop()
 
 
 def _asset_exists(asset_id: str) -> bool:
@@ -35,6 +51,7 @@ def home() -> str:
         <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
         <li><a href='/ui/events'>UI: Add Event</a></li>
         <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
+        <li><a href='/worker/status'>Worker status</a></li>
         <li><a href='/docs'>Swagger UI</a></li>
       </ul>
       <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
@@ -297,7 +314,7 @@ def dashboard() -> str:
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a></p>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <table border='1' cellpadding='8' cellspacing='0'>
@@ -345,6 +362,17 @@ def upsert_collector(target: CollectorTarget) -> CollectorTarget:
 def delete_collector(target_id: str) -> dict[str, str]:
     service.delete_collector_target(target_id)
     return {"status": "deleted"}
+
+
+@app.get("/worker/status")
+def worker_status() -> dict[str, bool]:
+    return {"enabled": ENABLE_AGENTLESS_WORKER}
+
+
+@app.post("/worker/run-once")
+def worker_run_once() -> dict[str, int]:
+    accepted = worker.run_once()
+    return {"accepted": accepted}
 
 
 @app.post("/events", response_model=Event)

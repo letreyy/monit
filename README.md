@@ -401,3 +401,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 
 Сейчас это конфигурационный слой (foundation). Следующий шаг — worker/scheduler,
 который будет автоматически обходить enabled targets по `poll_interval_sec` и собирать данные без отдельных скриптов на хостах.
+
+
+## Worker для agentless-сбора (первый рабочий шаг)
+
+Сделан базовый scheduler/worker внутри API:
+
+- берёт `enabled` targets из `collector_targets`;
+- учитывает `poll_interval_sec`;
+- выполняет TCP probe до `address:port`;
+- создаёт событие `source=agentless_<type>` в asset (успех/ошибка доступности).
+
+Управление:
+
+- `GET /worker/status` — включён ли worker;
+- `POST /worker/run-once` — принудительный один цикл (удобно для проверки).
+
+Переменная окружения:
+
+- `ENABLE_AGENTLESS_WORKER=1` (по умолчанию включён).
+
+Важно: это первый этап agentless-режима. На следующем шаге добавим
+реальные протокольные сборщики (WinRM/SSH/SNMP запросы), а не только reachability probe.

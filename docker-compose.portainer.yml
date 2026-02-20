@@ -12,6 +12,7 @@ services:
     environment:
       APP_ENV: production
       TZ: UTC
+      ENABLE_AGENTLESS_WORKER: "1"
     volumes:
       - inframind_data:/app/data
 
