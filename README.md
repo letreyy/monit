@@ -448,3 +448,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 - `/worker/targets` теперь показывает данные из persisted state.
 
 Это база для следующего шага: подключение реальных WinRM/SSH/SNMP collectors с cursor-based чтением.
+
+## Следующий шаг (реализовано): protocol-aware worker path
+
+Продолжаем по порядку. В worker добавлен протокольный dispatch:
+
+- `winrm` path,
+- `ssh` path,
+- `snmp` path.
+
+Пока сбор внутри каждого path остаётся на уровне reachability probe, но уже есть:
+
+- progression `last_cursor` (persisted),
+- persisted state (`last_run`, `last_success`, `last_error`, `failure_streak`),
+- dedup с окном по времени (дубли отбрасываются только в пределах dedup window, а не навсегда).
+
+Это подготовка к следующему шагу: подставить реальный WinRM pull EventLog вместо probe без изменения общей архитектуры worker.

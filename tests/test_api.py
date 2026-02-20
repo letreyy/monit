@@ -98,3 +98,37 @@ def test_dedup_batch_ingest() -> None:
     ingest_resp = client.post("/ingest/events", json=payload)
     assert ingest_resp.status_code == 200
     assert ingest_resp.json()["accepted"] == 1
+
+
+def test_winrm_cursor_progression() -> None:
+    client.post(
+        "/assets",
+        json={"id": "win-cursor", "name": "win-cursor", "asset_type": "server", "location": "R9"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-winrm",
+            "name": "WinRM target",
+            "address": "127.0.0.1",
+            "collector_type": "winrm",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "win-cursor",
+        },
+    )
+
+    first = client.post("/worker/run-once")
+    assert first.status_code == 200
+
+    # force immediate second cycle for this target in tests
+    main_module.worker._last_run_at["col-winrm"] = 0
+    second = client.post("/worker/run-once")
+    assert second.status_code == 200
+
+    targets = client.get("/worker/targets").json()
+    target = [t for t in targets if t["target_id"] == "col-winrm"][0]
+    assert target["last_cursor"] == "2"

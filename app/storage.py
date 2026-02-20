@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models import Asset, CollectorState, CollectorTarget, Event
@@ -249,7 +250,18 @@ class SQLiteStorage:
             ).fetchone()
 
             if row:
-                return event, False
+                try:
+                    last_ts = datetime.fromisoformat(row["timestamp"])
+                    if last_ts.tzinfo is None:
+                        last_ts = last_ts.replace(tzinfo=timezone.utc)
+                    cur_ts = event.timestamp
+                    if cur_ts.tzinfo is None:
+                        cur_ts = cur_ts.replace(tzinfo=timezone.utc)
+                    age_sec = (cur_ts - last_ts).total_seconds()
+                    if age_sec <= dedup_window_sec:
+                        return event, False
+                except Exception:
+                    return event, False
 
             conn.execute(
                 """

@@ -99,10 +99,34 @@ class AgentlessWorker:
             self._stop_event.wait(self.tick_sec)
 
     def _collect_target(self, target: CollectorTarget) -> tuple[Event, CollectorState]:
+        if target.collector_type.value == "winrm":
+            return self._collect_winrm_target(target)
+        if target.collector_type.value == "ssh":
+            return self._collect_ssh_target(target)
+        return self._collect_snmp_target(target)
+
+    def _next_cursor(self, prev: CollectorState) -> str:
+        try:
+            base = int(prev.last_cursor) if prev.last_cursor else 0
+        except ValueError:
+            base = 0
+        return str(base + 1)
+
+    def _collect_winrm_target(self, target: CollectorTarget) -> tuple[Event, CollectorState]:
+        return self._collect_generic_target(target, "winrm")
+
+    def _collect_ssh_target(self, target: CollectorTarget) -> tuple[Event, CollectorState]:
+        return self._collect_generic_target(target, "ssh")
+
+    def _collect_snmp_target(self, target: CollectorTarget) -> tuple[Event, CollectorState]:
+        return self._collect_generic_target(target, "snmp")
+
+    def _collect_generic_target(self, target: CollectorTarget, proto: str) -> tuple[Event, CollectorState]:
         result = self._probe_tcp(target.address, target.port, self.timeout_sec)
-        source = f"agentless_{target.collector_type.value}"
+        source = f"agentless_{proto}"
         prev = self.service.get_collector_state(target.id)
         current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        next_cursor = self._next_cursor(prev)
 
         if result.ok:
             state = CollectorState(
@@ -110,14 +134,17 @@ class AgentlessWorker:
                 last_success_ts=current_ts,
                 last_run_ts=current_ts,
                 last_error=None,
-                last_cursor=current_ts,
+                last_cursor=next_cursor,
                 failure_streak=0,
             )
             return (
                 Event(
                     asset_id=target.asset_id,
                     source=source,
-                    message=f"Collector target '{target.name}' reachable at {target.address}:{target.port}. {result.message}",
+                    message=(
+                        f"[{proto}] target '{target.name}' reachable at {target.address}:{target.port}. "
+                        f"{result.message}; cursor={next_cursor}"
+                    ),
                     metric="collector_latency_ms",
                     value=result.latency_ms,
                     severity=Severity.info,
@@ -131,7 +158,7 @@ class AgentlessWorker:
             last_success_ts=prev.last_success_ts,
             last_run_ts=current_ts,
             last_error=result.message,
-            last_cursor=prev.last_cursor,
+            last_cursor=next_cursor,
             failure_streak=streak,
         )
         severity = Severity.critical if streak >= 3 else Severity.warning
@@ -140,8 +167,8 @@ class AgentlessWorker:
                 asset_id=target.asset_id,
                 source=source,
                 message=(
-                    f"Collector target '{target.name}' unreachable at {target.address}:{target.port}. "
-                    f"{result.message}. failure_streak={streak}"
+                    f"[{proto}] target '{target.name}' unreachable at {target.address}:{target.port}. "
+                    f"{result.message}. failure_streak={streak}; cursor={next_cursor}"
                 ),
                 metric="collector_failure_streak",
                 value=float(streak),
