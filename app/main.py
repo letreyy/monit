@@ -58,6 +58,7 @@ def home() -> str:
         <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
         <li><a href='/worker/status'>Worker status</a></li>
         <li><a href='/worker/targets'>Worker targets</a></li>
+        <li><a href='/ui/diagnostics'>UI: Worker diagnostics</a></li>
         <li><a href='/docs'>Swagger UI</a></li>
       </ul>
       <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
@@ -370,6 +371,33 @@ def worker_health() -> dict[str, int | str | bool]:
     return snap
 
 
+@app.get("/worker/history")
+def worker_history(limit: int = 100) -> list[dict]:
+    return worker.history(limit=limit)
+
+
+@app.get("/ui/diagnostics", response_class=HTMLResponse)
+def ui_diagnostics() -> str:
+    history = worker.history(limit=100)
+    rows = []
+    for row in history:
+        rows.append(
+            f"<tr><td>{row.get('ts')}</td><td>{row.get('target_id')}</td><td>{row.get('collector_type')}</td>"
+            f"<td>{row.get('accepted_events')}</td><td>{row.get('failure_streak')}</td><td>{row.get('last_cursor') or '-'}</td>"
+            f"<td>{row.get('last_error') or '-'}</td></tr>"
+        )
+    rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
+    return f"""
+    <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
+      <h1>Worker diagnostics</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a></p>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </body></html>
+    """
+
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
@@ -389,7 +417,7 @@ def dashboard() -> str:
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a></p>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a> | <a href='/ui/diagnostics'>Worker diagnostics</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <div style='padding: 12px; border: 1px solid #ccc; margin: 12px 0; background: #f9f9f9;'>

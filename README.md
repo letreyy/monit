@@ -589,3 +589,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: добавить lightweight history/тренды по worker health (например, последние N циклов с ошибками по target) и вывести это в отдельной UI-странице диагностики collector'ов.
+
+## Следующий шаг (реализовано): history/trends по worker + diagnostics UI
+
+Сделали следующий шаг по плану наблюдаемости worker:
+
+- добавлен endpoint `GET /worker/history?limit=N` с последними циклами poll по target;
+- добавлена UI-страница `GET /ui/diagnostics` с таблицей последних запусков (target/type/accepted/failure/cursor/error);
+- на главную и в dashboard добавлены ссылки на diagnostics.
+
+История хранится как lightweight ring-buffer в памяти процесса (до 500 записей), что закрывает быстрый operational use-case без миграции схемы БД.
+
+### Что дальше по плану
+
+Следующий шаг: сделать persisted history/telemetry (в SQLite) и добавить фильтры/графики по target на diagnostics-странице.

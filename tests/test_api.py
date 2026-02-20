@@ -421,3 +421,42 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert resp.status_code == 200
     assert "Worker health:" in resp.text
     assert "/worker/health" in resp.text
+
+
+def test_worker_history_endpoint_has_rows_after_run_once() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-hist", "name": "srv-hist", "asset_type": "server", "location": "R7"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-hist",
+            "name": "History target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-hist",
+        },
+    )
+
+    run_resp = client.post("/worker/run-once")
+    assert run_resp.status_code == 200
+
+    hist_resp = client.get("/worker/history?limit=5")
+    assert hist_resp.status_code == 200
+    payload = hist_resp.json()
+    assert isinstance(payload, list)
+    assert len(payload) >= 1
+    assert payload[0]["target_id"] == "col-hist"
+
+
+def test_ui_diagnostics_page() -> None:
+    resp = client.get("/ui/diagnostics")
+    assert resp.status_code == 200
+    assert "Worker diagnostics" in resp.text
+    assert "/worker/history" in resp.text
