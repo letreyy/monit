@@ -100,7 +100,7 @@ def test_dedup_batch_ingest() -> None:
     assert ingest_resp.json()["accepted"] == 1
 
 
-def test_winrm_cursor_progression() -> None:
+def test_winrm_real_pull_path_with_mock() -> None:
     client.post(
         "/assets",
         json={"id": "win-cursor", "name": "win-cursor", "asset_type": "server", "location": "R9"},
@@ -112,7 +112,7 @@ def test_winrm_cursor_progression() -> None:
             "name": "WinRM target",
             "address": "127.0.0.1",
             "collector_type": "winrm",
-            "port": 1,
+            "port": 5985,
             "username": "u",
             "password": "p",
             "poll_interval_sec": 10,
@@ -121,14 +121,28 @@ def test_winrm_cursor_progression() -> None:
         },
     )
 
-    first = client.post("/worker/run-once")
-    assert first.status_code == 200
+    def fake_pull(target, last_cursor):
+        rows = [
+            {
+                "RecordId": 11,
+                "Id": 6008,
+                "LogName": "System",
+                "ProviderName": "EventLog",
+                "LevelDisplayName": "Critical",
+                "Message": "Unexpected shutdown",
+            }
+        ]
+        return rows, "11"
 
-    # force immediate second cycle for this target in tests
-    main_module.worker._last_run_at["col-winrm"] = 0
-    second = client.post("/worker/run-once")
-    assert second.status_code == 200
+    main_module.worker._pull_winrm_records = fake_pull  # type: ignore[attr-defined]
+
+    run_resp = client.post("/worker/run-once")
+    assert run_resp.status_code == 200
+    assert run_resp.json()["accepted"] >= 1
 
     targets = client.get("/worker/targets").json()
     target = [t for t in targets if t["target_id"] == "col-winrm"][0]
-    assert target["last_cursor"] == "2"
+    assert target["last_cursor"] == "11"
+
+    events_resp = client.get("/assets/win-cursor/events")
+    assert any("RecordId=11" in e["message"] for e in events_resp.json())

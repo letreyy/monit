@@ -464,3 +464,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 - dedup с окном по времени (дубли отбрасываются только в пределах dedup window, а не навсегда).
 
 Это подготовка к следующему шагу: подставить реальный WinRM pull EventLog вместо probe без изменения общей архитектуры worker.
+
+## Следующий шаг (реализовано): реальный WinRM pull
+
+В `winrm` path worker теперь делает не только TCP-probe, а пытается выполнить реальный pull EventLog через WinRM:
+
+- подключение к `http://<address>:<port>/wsman`;
+- выполнение PowerShell `Get-WinEvent` (System/Application) c фильтром по `RecordId > last_cursor`;
+- парсинг результата и запись событий в хранилище;
+- обновление `last_cursor` в `collector_state`.
+
+Зависимость для этого пути: `pywinrm` (добавлена в `requirements.txt`).
+
+Если WinRM недоступен/не настроен, worker пишет диагностическое событие об ошибке pull и увеличивает `failure_streak`.
