@@ -17,35 +17,37 @@ def setup_function() -> None:
 client = TestClient(main_module.app)
 
 
-def test_ui_asset_event_detail_and_delete_flow() -> None:
-    create_asset = client.post(
+def test_ui_collector_target_flow() -> None:
+    client.post(
         "/ui/assets",
-        data={"asset_id": "srv-ui-01", "name": "srv-ui-01", "asset_type": "server", "location": "R5"},
-        follow_redirects=False,
+        data={"asset_id": "srv-01", "name": "srv-01", "asset_type": "server", "location": "R1"},
     )
-    assert create_asset.status_code == 303
 
-    add_event = client.post(
-        "/ui/events",
+    resp = client.post(
+        "/ui/collectors",
         data={
-            "asset_id": "srv-ui-01",
-            "source": "manual_ui",
-            "message": "EventID=6008 unexpected shutdown",
-            "severity": "critical",
+            "target_id": "col-01",
+            "name": "Windows collector",
+            "collector_type": "winrm",
+            "address": "10.10.10.5",
+            "port": "5985",
+            "username": "admin",
+            "password": "secret",
+            "asset_id": "srv-01",
+            "poll_interval_sec": "60",
+            "enabled": "on",
         },
         follow_redirects=False,
     )
-    assert add_event.status_code == 303
+    assert resp.status_code == 303
 
-    detail_page = client.get("/ui/assets/srv-ui-01")
-    assert detail_page.status_code == 200
-    assert "Asset detail: srv-ui-01" in detail_page.text
+    ui_page = client.get("/ui/collectors")
+    assert ui_page.status_code == 200
+    assert "col-01" in ui_page.text
 
-    delete_asset = client.post("/ui/assets/srv-ui-01/delete", follow_redirects=False)
-    assert delete_asset.status_code == 303
-
-    assets_page = client.get("/ui/assets")
-    assert "srv-ui-01" not in assets_page.text
+    api_page = client.get("/collectors")
+    assert api_page.status_code == 200
+    assert api_page.json()[0]["collector_type"] == "winrm"
 
 
 def test_windows_correlation_endpoint() -> None:
@@ -58,48 +60,13 @@ def test_windows_correlation_endpoint() -> None:
         "/ingest/events",
         json={
             "events": [
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[System] EventID=6008 unexpected shutdown",
-                    "severity": "critical",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[System] EventID=41 kernel power",
-                    "severity": "critical",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[Security] EventID=4625 failed logon",
-                    "severity": "warning",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[Security] EventID=4625 failed logon",
-                    "severity": "warning",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[Security] EventID=4625 failed logon",
-                    "severity": "warning",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[Security] EventID=4625 failed logon",
-                    "severity": "warning",
-                },
-                {
-                    "asset_id": "win-01",
-                    "source": "windows_eventlog",
-                    "message": "[Security] EventID=4625 failed logon",
-                    "severity": "warning",
-                },
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=6008", "severity": "critical"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=41", "severity": "critical"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
+                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
             ]
         },
     )

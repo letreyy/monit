@@ -384,3 +384,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 3. новые события будут приходить с нормальной кириллицей.
 
 Старые уже сохранённые "битые" записи в БД останутся как есть (это ожидаемо).
+
+## Следующий шаг к сбору без скриптов (agentless)
+
+Добавлена основа для сценария "указал IP/учётку и сбор пошёл":
+
+- `GET /ui/collectors` — UI для настройки collector targets;
+- `POST /ui/collectors` — сохранение target (тип, адрес, порт, учётка, интервал, привязка к asset);
+- API: `GET /collectors`, `POST /collectors`, `DELETE /collectors/{target_id}`.
+
+Поддерживаемые типы target:
+
+- `winrm` (Windows),
+- `ssh` (Linux/Unix),
+- `snmp` (сетевое/СХД).
+
+Сейчас это конфигурационный слой (foundation). Следующий шаг — worker/scheduler,
+который будет автоматически обходить enabled targets по `poll_interval_sec` и собирать данные без отдельных скриптов на хостах.

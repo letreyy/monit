@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from app.models import Asset, Event
+from app.models import Asset, CollectorTarget, Event
 
 
 class SQLiteStorage:
@@ -44,6 +44,23 @@ class SQLiteStorage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS collector_targets (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    address TEXT NOT NULL,
+                    collector_type TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT NOT NULL,
+                    password TEXT NOT NULL,
+                    poll_interval_sec INTEGER NOT NULL,
+                    enabled INTEGER NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    FOREIGN KEY(asset_id) REFERENCES assets(id)
+                )
+                """
+            )
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -63,6 +80,7 @@ class SQLiteStorage:
     def delete_asset(self, asset_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM events WHERE asset_id = ?", (asset_id,))
+            conn.execute("DELETE FROM collector_targets WHERE asset_id = ?", (asset_id,))
             conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
 
     def list_assets(self) -> list[Asset]:
@@ -74,6 +92,63 @@ class SQLiteStorage:
         with self._connect() as conn:
             row = conn.execute("SELECT 1 FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return row is not None
+
+    def upsert_collector_target(self, target: CollectorTarget) -> CollectorTarget:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO collector_targets(
+                    id, name, address, collector_type, port, username, password,
+                    poll_interval_sec, enabled, asset_id
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name,
+                    address=excluded.address,
+                    collector_type=excluded.collector_type,
+                    port=excluded.port,
+                    username=excluded.username,
+                    password=excluded.password,
+                    poll_interval_sec=excluded.poll_interval_sec,
+                    enabled=excluded.enabled,
+                    asset_id=excluded.asset_id
+                """,
+                (
+                    target.id,
+                    target.name,
+                    target.address,
+                    target.collector_type.value,
+                    target.port,
+                    target.username,
+                    target.password,
+                    target.poll_interval_sec,
+                    1 if target.enabled else 0,
+                    target.asset_id,
+                ),
+            )
+        return target
+
+    def list_collector_targets(self) -> list[CollectorTarget]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, name, address, collector_type, port, username, password,
+                       poll_interval_sec, enabled, asset_id
+                FROM collector_targets
+                ORDER BY id
+                """
+            ).fetchall()
+
+        result = []
+        for row in rows:
+            data = dict(row)
+            data["enabled"] = bool(data["enabled"])
+            result.append(CollectorTarget(**data))
+        return result
+
+    def delete_collector_target(self, target_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM collector_targets WHERE id = ?", (target_id,))
 
     def insert_event(self, event: Event) -> Event:
         with self._connect() as conn:

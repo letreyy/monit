@@ -17,11 +17,30 @@ class AssetType(str, Enum):
     bmc = "bmc"
 
 
+class CollectorType(str, Enum):
+    winrm = "winrm"
+    ssh = "ssh"
+    snmp = "snmp"
+
+
 class Asset(BaseModel):
     id: str = Field(..., description="Unique asset identifier")
     name: str
     asset_type: AssetType
     location: str | None = None
+
+
+class CollectorTarget(BaseModel):
+    id: str
+    name: str
+    address: str
+    collector_type: CollectorType
+    port: int
+    username: str
+    password: str
+    poll_interval_sec: int = Field(default=60, ge=10)
+    enabled: bool = True
+    asset_id: str
 
 
 class Event(BaseModel):

@@ -5,6 +5,8 @@ from app.models import (
     Alert,
     Asset,
     AssetType,
+    CollectorTarget,
+    CollectorType,
     CorrelationInsight,
     Event,
     EventBatch,
@@ -15,7 +17,7 @@ from app.models import (
 )
 from app.services import MonitoringService
 
-app = FastAPI(title="InfraMind Monitor API", version="0.7.0")
+app = FastAPI(title="InfraMind Monitor API", version="0.8.0")
 service = MonitoringService()
 
 
@@ -32,12 +34,97 @@ def home() -> str:
         <li><a href='/dashboard'>Dashboard</a></li>
         <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
         <li><a href='/ui/events'>UI: Add Event</a></li>
+        <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
         <li><a href='/docs'>Swagger UI</a></li>
-        <li><a href='/redoc'>ReDoc</a></li>
       </ul>
-      <p>Now you can manage assets/events via web forms, not only API.</p>
+      <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
     </body></html>
     """
+
+
+@app.get("/ui/collectors", response_class=HTMLResponse)
+def ui_collectors() -> str:
+    asset_options = "".join(f"<option value='{a.id}'>{a.id} ({a.name})</option>" for a in service.list_assets())
+    if not asset_options:
+        asset_options = "<option value=''>No assets. Create one first.</option>"
+
+    rows = []
+    for c in service.list_collector_targets():
+        rows.append(
+            f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
+            f"<td>{c.username}</td><td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
+            f"<td><form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0'><button type='submit'>Delete</button></form></td></tr>"
+        )
+    rows_html = "".join(rows) if rows else "<tr><td colspan='8'>No collector targets yet</td></tr>"
+
+    return f"""
+    <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
+      <h1>Agentless Collector Targets</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
+      <form method='post' action='/ui/collectors'>
+        <label>ID <input name='target_id' required /></label><br/><br/>
+        <label>Name <input name='name' required /></label><br/><br/>
+        <label>Type
+          <select name='collector_type'>
+            <option value='winrm'>winrm (Windows)</option>
+            <option value='ssh'>ssh (Linux/Unix)</option>
+            <option value='snmp'>snmp (Network/Storage)</option>
+          </select>
+        </label><br/><br/>
+        <label>Address/IP <input name='address' required /></label><br/><br/>
+        <label>Port <input name='port' type='number' value='5985' required /></label><br/><br/>
+        <label>Username <input name='username' required /></label><br/><br/>
+        <label>Password <input name='password' type='password' required /></label><br/><br/>
+        <label>Asset
+          <select name='asset_id' required>{asset_options}</select>
+        </label><br/><br/>
+        <label>Poll interval (sec) <input name='poll_interval_sec' type='number' value='60' required /></label><br/><br/>
+        <label>Enabled <input name='enabled' type='checkbox' checked /></label><br/><br/>
+        <button type='submit'>Save collector target</button>
+      </form>
+      <h2>Configured targets</h2>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Address</th><th>User</th><th>Asset</th><th>Enabled</th><th>Actions</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+      <p><i>Next step: scheduler/worker will auto-poll enabled targets using these settings.</i></p>
+    </body></html>
+    """
+
+
+@app.post("/ui/collectors")
+def ui_collectors_submit(
+    target_id: str = Form(...),
+    name: str = Form(...),
+    collector_type: str = Form(...),
+    address: str = Form(...),
+    port: int = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    asset_id: str = Form(...),
+    poll_interval_sec: int = Form(60),
+    enabled: str | None = Form(None),
+) -> RedirectResponse:
+    target = CollectorTarget(
+        id=target_id.strip(),
+        name=name.strip(),
+        collector_type=CollectorType(collector_type),
+        address=address.strip(),
+        port=port,
+        username=username.strip(),
+        password=password,
+        asset_id=asset_id.strip(),
+        poll_interval_sec=poll_interval_sec,
+        enabled=enabled is not None,
+    )
+    service.upsert_collector_target(target)
+    return RedirectResponse(url="/ui/collectors", status_code=303)
+
+
+@app.post("/ui/collectors/{target_id}/delete")
+def ui_collectors_delete(target_id: str) -> RedirectResponse:
+    service.delete_collector_target(target_id)
+    return RedirectResponse(url="/ui/collectors", status_code=303)
 
 
 @app.get("/ui/assets", response_class=HTMLResponse)
@@ -210,7 +297,7 @@ def dashboard() -> str:
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a></p>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <table border='1' cellpadding='8' cellspacing='0'>
@@ -239,6 +326,25 @@ def list_assets() -> list[Asset]:
 @app.post("/assets", response_model=Asset)
 def upsert_asset(asset: Asset) -> Asset:
     return service.upsert_asset(asset)
+
+
+@app.get("/collectors", response_model=list[CollectorTarget])
+def list_collectors() -> list[CollectorTarget]:
+    return service.list_collector_targets()
+
+
+@app.post("/collectors", response_model=CollectorTarget)
+def upsert_collector(target: CollectorTarget) -> CollectorTarget:
+    try:
+        return service.upsert_collector_target(target)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/collectors/{target_id}")
+def delete_collector(target_id: str) -> dict[str, str]:
+    service.delete_collector_target(target_id)
+    return {"status": "deleted"}
 
 
 @app.post("/events", response_model=Event)
