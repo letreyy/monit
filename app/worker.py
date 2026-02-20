@@ -24,6 +24,8 @@ class AgentlessWorker:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_run_at: dict[str, float] = {}
+        self._last_result: dict[str, dict[str, str | int | float | bool | None]] = {}
+        self._cycle_count = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -37,9 +39,41 @@ class AgentlessWorker:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
 
+    def status(self) -> dict:
+        return {
+            "running": bool(self._thread and self._thread.is_alive()),
+            "tick_sec": self.tick_sec,
+            "timeout_sec": self.timeout_sec,
+            "cycle_count": self._cycle_count,
+            "targets_tracked": len(self._last_result),
+        }
+
+    def target_status(self) -> list[dict]:
+        rows = []
+        for target in self.service.list_collector_targets():
+            state = self._last_result.get(target.id, {})
+            rows.append(
+                {
+                    "target_id": target.id,
+                    "name": target.name,
+                    "collector_type": target.collector_type.value,
+                    "address": target.address,
+                    "port": target.port,
+                    "enabled": target.enabled,
+                    "last_ok": state.get("ok"),
+                    "last_latency_ms": state.get("latency_ms"),
+                    "last_message": state.get("message"),
+                    "last_run_ts": state.get("run_ts"),
+                    "failure_streak": state.get("failure_streak", 0),
+                }
+            )
+        return rows
+
     def run_once(self) -> int:
         accepted = 0
         now = time.time()
+        self._cycle_count += 1
+
         for target in self.service.list_collector_targets():
             if not target.enabled:
                 continue
@@ -59,13 +93,24 @@ class AgentlessWorker:
             try:
                 self.run_once()
             except Exception:
-                # keep worker alive; errors should not kill polling loop
                 pass
             self._stop_event.wait(self.tick_sec)
 
     def _collect_target(self, target: CollectorTarget) -> Event:
         result = self._probe_tcp(target.address, target.port, self.timeout_sec)
         source = f"agentless_{target.collector_type.value}"
+
+        prev = self._last_result.get(target.id, {})
+        prev_streak = int(prev.get("failure_streak", 0))
+        streak = 0 if result.ok else prev_streak + 1
+
+        self._last_result[target.id] = {
+            "ok": result.ok,
+            "latency_ms": result.latency_ms,
+            "message": result.message,
+            "run_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "failure_streak": streak,
+        }
 
         if result.ok:
             return Event(
@@ -77,13 +122,17 @@ class AgentlessWorker:
                 severity=Severity.info,
             )
 
+        severity = Severity.critical if streak >= 3 else Severity.warning
         return Event(
             asset_id=target.asset_id,
             source=source,
-            message=f"Collector target '{target.name}' unreachable at {target.address}:{target.port}. {result.message}",
-            metric=None,
-            value=None,
-            severity=Severity.warning,
+            message=(
+                f"Collector target '{target.name}' unreachable at {target.address}:{target.port}. "
+                f"{result.message}. failure_streak={streak}"
+            ),
+            metric="collector_failure_streak",
+            value=float(streak),
+            severity=severity,
         )
 
     @staticmethod

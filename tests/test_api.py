@@ -104,6 +104,14 @@ def test_worker_run_once_generates_agentless_event() -> None:
     assert run_resp.status_code == 200
     assert run_resp.json()["accepted"] >= 1
 
+    status_resp = client.get("/worker/status")
+    assert status_resp.status_code == 200
+    assert "cycle_count" in status_resp.json()
+
+    targets_resp = client.get("/worker/targets")
+    assert targets_resp.status_code == 200
+    assert targets_resp.json()[0]["target_id"] == "col-worker"
+
     events_resp = client.get("/assets/srv-worker/events")
     assert events_resp.status_code == 200
     assert any(e["source"].startswith("agentless_") for e in events_resp.json())

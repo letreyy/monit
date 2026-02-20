@@ -22,7 +22,9 @@ from app.worker import AgentlessWorker
 
 app = FastAPI(title="InfraMind Monitor API", version="0.8.0")
 service = MonitoringService()
-worker = AgentlessWorker(service)
+WORKER_TICK_SEC = float(os.getenv("WORKER_TICK_SEC", "2"))
+WORKER_TIMEOUT_SEC = float(os.getenv("WORKER_TIMEOUT_SEC", "2"))
+worker = AgentlessWorker(service, tick_sec=WORKER_TICK_SEC, timeout_sec=WORKER_TIMEOUT_SEC)
 ENABLE_AGENTLESS_WORKER = os.getenv("ENABLE_AGENTLESS_WORKER", "1") == "1"
 
 
@@ -52,6 +54,7 @@ def home() -> str:
         <li><a href='/ui/events'>UI: Add Event</a></li>
         <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
         <li><a href='/worker/status'>Worker status</a></li>
+        <li><a href='/worker/targets'>Worker targets</a></li>
         <li><a href='/docs'>Swagger UI</a></li>
       </ul>
       <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
@@ -314,7 +317,7 @@ def dashboard() -> str:
     return f"""
     <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
       <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a></p>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a></p>
       <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
       Critical assets: <b>{overview_data['critical_assets']}</b></p>
       <table border='1' cellpadding='8' cellspacing='0'>
@@ -365,8 +368,15 @@ def delete_collector(target_id: str) -> dict[str, str]:
 
 
 @app.get("/worker/status")
-def worker_status() -> dict[str, bool]:
-    return {"enabled": ENABLE_AGENTLESS_WORKER}
+def worker_status() -> dict:
+    status = worker.status()
+    status["enabled"] = ENABLE_AGENTLESS_WORKER
+    return status
+
+
+@app.get("/worker/targets")
+def worker_targets() -> list[dict]:
+    return worker.target_status()
 
 
 @app.post("/worker/run-once")

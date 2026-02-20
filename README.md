@@ -423,3 +423,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 
 Важно: это первый этап agentless-режима. На следующем шаге добавим
 реальные протокольные сборщики (WinRM/SSH/SNMP запросы), а не только reachability probe.
+
+
+### Worker status/targets
+
+Для контроля worker добавлены endpoint'ы:
+
+- `GET /worker/status` — running/cycle_count/tick/timeout;
+- `GET /worker/targets` — последний статус по каждой цели (ok, latency, failure_streak, last_run_ts);
+- `POST /worker/run-once` — форсированный цикл.
+
+Доп. переменные окружения:
+
+- `WORKER_TICK_SEC` (по умолчанию `2`),
+- `WORKER_TIMEOUT_SEC` (по умолчанию `2`).
