@@ -49,6 +49,9 @@ class CollectorTarget(BaseModel):
     ssh_metrics_command: str = "cat /proc/loadavg"
     ssh_log_path: str = "/var/log/syslog"
     ssh_tail_lines: int = Field(default=50, ge=1, le=500)
+    snmp_community: str = "public"
+    snmp_version: str = "2c"
+    snmp_oids: str = "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"
 
 
 class CollectorTargetPublic(BaseModel):
@@ -70,10 +73,13 @@ class CollectorTargetPublic(BaseModel):
     ssh_metrics_command: str
     ssh_log_path: str
     ssh_tail_lines: int
+    snmp_community: str = "********"
+    snmp_version: str
+    snmp_oids: str
 
     @classmethod
     def from_target(cls, target: "CollectorTarget") -> "CollectorTargetPublic":
-        return cls(**target.model_dump(exclude={"password"}), password="********")
+        return cls(**target.model_dump(exclude={"password", "snmp_community"}), password="********", snmp_community="********")
 
 
 class CollectorState(BaseModel):

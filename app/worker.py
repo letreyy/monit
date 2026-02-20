@@ -256,7 +256,68 @@ class AgentlessWorker:
         return events, state
 
     def _collect_snmp_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
-        return self._collect_probe_target(target, "snmp")
+        prev = self.service.get_collector_state(target.id)
+        current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        try:
+            rows, next_cursor = self._pull_snmp_snapshot(target, prev.last_cursor)
+        except Exception as exc:
+            streak = prev.failure_streak + 1
+            state = CollectorState(
+                target_id=target.id,
+                last_success_ts=prev.last_success_ts,
+                last_run_ts=current_ts,
+                last_error=f"snmp pull failed: {exc}",
+                last_cursor=prev.last_cursor,
+                failure_streak=streak,
+            )
+            severity = Severity.critical if streak >= 3 else Severity.warning
+            return (
+                [
+                    Event(
+                        asset_id=target.asset_id,
+                        source="agentless_snmp",
+                        message=f"[snmp] pull failed for '{target.name}': {exc}",
+                        metric="collector_failure_streak",
+                        value=float(streak),
+                        severity=severity,
+                    )
+                ],
+                state,
+            )
+
+        events: list[Event] = []
+        for row in rows:
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="snmp_metric",
+                    message=f"SNMP {row.get('oid')}={row.get('value')}",
+                    metric=row.get("metric"),
+                    value=row.get("value"),
+                    severity=Severity.info,
+                )
+            )
+
+        if not events:
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="agentless_snmp",
+                    message=f"[snmp] no data for '{target.name}', cursor={next_cursor}",
+                    severity=Severity.info,
+                )
+            )
+
+        state = CollectorState(
+            target_id=target.id,
+            last_success_ts=current_ts,
+            last_run_ts=current_ts,
+            last_error=None,
+            last_cursor=next_cursor,
+            failure_streak=0,
+        )
+        return events, state
 
     def _collect_probe_target(self, target: CollectorTarget, proto: str) -> tuple[list[Event], CollectorState]:
         result = self._probe_tcp(target.address, target.port, self.timeout_sec)
@@ -367,6 +428,53 @@ class AgentlessWorker:
             return rows, next_cursor
         finally:
             client.close()
+
+    def _pull_snmp_snapshot(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[dict], str]:
+        try:
+            from pysnmp.hlapi import (  # type: ignore
+                CommunityData,
+                ContextData,
+                ObjectIdentity,
+                ObjectType,
+                SnmpEngine,
+                UdpTransportTarget,
+                getCmd,
+            )
+        except ImportError as exc:
+            raise RuntimeError("pysnmp is not installed") from exc
+
+        oids = [o.strip() for o in target.snmp_oids.split(",") if o.strip()]
+        if not oids:
+            oids = ["1.3.6.1.2.1.1.3.0"]
+
+        community = target.snmp_community or "public"
+        snmp_mp = 1 if target.snmp_version == "2c" else 3
+        rows: list[dict] = []
+        for oid in oids:
+            iterator = getCmd(
+                SnmpEngine(),
+                CommunityData(community, mpModel=snmp_mp),
+                UdpTransportTarget((target.address, target.port), timeout=self.timeout_sec, retries=0),
+                ContextData(),
+                ObjectType(ObjectIdentity(oid)),
+            )
+            error_indication, error_status, _, var_binds = next(iterator)
+            if error_indication:
+                raise RuntimeError(str(error_indication))
+            if error_status:
+                raise RuntimeError(str(error_status))
+
+            for name, value in var_binds:
+                metric_name = f"snmp_{str(name).replace('.', '_')}"
+                try:
+                    parsed_value: float | None = float(value)
+                except Exception:
+                    parsed_value = None
+                rows.append({"oid": str(name), "metric": metric_name, "value": parsed_value})
+
+        cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
+        next_cursor = str(max(cursor + 1, int(time.time())))
+        return rows, next_cursor
 
     def _pull_winrm_records(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[dict], str]:
         try:

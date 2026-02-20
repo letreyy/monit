@@ -553,3 +553,27 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: **реальный SNMP pull** (OID polling + нормализация в метрики/события), чтобы закрыть третий protocol path.
+
+## Следующий шаг (реализовано): реальный SNMP pull
+
+Сделан следующий шаг roadmap: `snmp` path теперь выполняет реальный poll OID'ов, а не только TCP-probe.
+
+Что реализовано:
+
+- configurable SNMP profile в collector target:
+  - `snmp_community`
+  - `snmp_version` (`2c`/`3`)
+  - `snmp_oids` (список OID через запятую)
+- worker path `_collect_snmp_target`:
+  - читает OID'ы через `pysnmp` (`getCmd`),
+  - нормализует результат в `snmp_metric` события,
+  - обновляет `last_cursor` и `collector_state`,
+  - при ошибках формирует `agentless_snmp` события с `failure_streak`.
+
+Безопасность:
+
+- `snmp_community` хранится в БД в шифрованном виде (при включенном `APP_SECRET_KEY`) и маскируется в `GET /collectors`.
+
+### Что дальше по плану
+
+Следующий шаг: **миграция lifecycle на FastAPI lifespan** (вместо deprecated `@app.on_event`) и добавление health-диагностики по воркеру/коллекторам в отдельном статус-виджете.

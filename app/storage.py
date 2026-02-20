@@ -70,6 +70,9 @@ class SQLiteStorage:
                     ssh_metrics_command TEXT NOT NULL DEFAULT 'cat /proc/loadavg',
                     ssh_log_path TEXT NOT NULL DEFAULT '/var/log/syslog',
                     ssh_tail_lines INTEGER NOT NULL DEFAULT 50,
+                    snmp_community TEXT NOT NULL DEFAULT 'public',
+                    snmp_version TEXT NOT NULL DEFAULT '2c',
+                    snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0',
                     FOREIGN KEY(asset_id) REFERENCES assets(id)
                 )
                 """
@@ -116,6 +119,14 @@ class SQLiteStorage:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN ssh_log_path TEXT NOT NULL DEFAULT '/var/log/syslog'")
         if "ssh_tail_lines" not in columns:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN ssh_tail_lines INTEGER NOT NULL DEFAULT 50")
+        if "snmp_community" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN snmp_community TEXT NOT NULL DEFAULT 'public'")
+        if "snmp_version" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN snmp_version TEXT NOT NULL DEFAULT '2c'")
+        if "snmp_oids" not in columns:
+            conn.execute(
+                "ALTER TABLE collector_targets ADD COLUMN snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0'"
+            )
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -159,9 +170,10 @@ class SQLiteStorage:
                     id, name, address, collector_type, port, username, password,
                     poll_interval_sec, enabled, asset_id,
                     winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
-                    ssh_metrics_command, ssh_log_path, ssh_tail_lines
+                    ssh_metrics_command, ssh_log_path, ssh_tail_lines,
+                    snmp_community, snmp_version, snmp_oids
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     address=excluded.address,
@@ -179,7 +191,10 @@ class SQLiteStorage:
                     winrm_batch_size=excluded.winrm_batch_size,
                     ssh_metrics_command=excluded.ssh_metrics_command,
                     ssh_log_path=excluded.ssh_log_path,
-                    ssh_tail_lines=excluded.ssh_tail_lines
+                    ssh_tail_lines=excluded.ssh_tail_lines,
+                    snmp_community=excluded.snmp_community,
+                    snmp_version=excluded.snmp_version,
+                    snmp_oids=excluded.snmp_oids
                 """,
                 (
                     target.id,
@@ -200,6 +215,9 @@ class SQLiteStorage:
                     target.ssh_metrics_command,
                     target.ssh_log_path,
                     target.ssh_tail_lines,
+                    self.secret_codec.encrypt(target.snmp_community),
+                    target.snmp_version,
+                    target.snmp_oids,
                 ),
             )
             conn.execute(
@@ -218,7 +236,8 @@ class SQLiteStorage:
                 SELECT id, name, address, collector_type, port, username, password,
                        poll_interval_sec, enabled, asset_id,
                        winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
-                       ssh_metrics_command, ssh_log_path, ssh_tail_lines
+                       ssh_metrics_command, ssh_log_path, ssh_tail_lines,
+                       snmp_community, snmp_version, snmp_oids
                 FROM collector_targets
                 ORDER BY id
                 """
@@ -231,6 +250,7 @@ class SQLiteStorage:
             data["winrm_use_https"] = bool(data["winrm_use_https"])
             data["winrm_validate_tls"] = bool(data["winrm_validate_tls"])
             data["password"] = self.secret_codec.decrypt(data["password"])
+            data["snmp_community"] = self.secret_codec.decrypt(data["snmp_community"])
             result.append(CollectorTarget(**data))
         return result
 

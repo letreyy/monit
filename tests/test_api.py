@@ -57,6 +57,7 @@ def test_ui_collector_target_flow() -> None:
     assert api_page.json()[0]["winrm_batch_size"] == 25
     assert api_page.json()[0]["password"] == "********"
     assert api_page.json()[0]["ssh_log_path"] == "/var/log/syslog"
+    assert api_page.json()[0]["snmp_community"] == "********"
 
 
 def test_worker_run_once_and_state() -> None:
@@ -321,4 +322,86 @@ def test_ssh_pull_uses_target_commands_with_mock() -> None:
     assert any("line1" in r.get("message", "") for r in rows)
     assert DummySSHClient.last_commands[0] == "cat /proc/loadavg"
     assert DummySSHClient.last_commands[1] == "tail -n 2 /var/log/messages"
+
+
+
+def test_snmp_pull_uses_oids_with_mock() -> None:
+    class DummyOID:
+        def __init__(self, oid):
+            self.oid = oid
+
+        def __str__(self):
+            return self.oid
+
+    class DummyValue:
+        def __init__(self, val):
+            self.val = val
+
+        def __str__(self):
+            return str(self.val)
+
+        def __float__(self):
+            return float(self.val)
+
+    class DummyCommunityData:
+        def __init__(self, community, mpModel=1):
+            self.community = community
+            self.mpModel = mpModel
+
+    class DummyUdpTransportTarget:
+        def __init__(self, endpoint, timeout=1, retries=0):
+            self.endpoint = endpoint
+            self.timeout = timeout
+            self.retries = retries
+
+    def dummy_getCmd(*args, **kwargs):
+        oid = args[-1].oid
+        value = 123 if oid.endswith("3.0") else 7
+        def _iter():
+            yield None, None, None, [(DummyOID(oid), DummyValue(value))]
+        return _iter()
+
+    class DummyObjectIdentity:
+        def __init__(self, oid):
+            self.oid = oid
+
+    class DummyObjectType:
+        def __init__(self, identity):
+            self.oid = identity.oid
+
+    class DummyHLAPI:
+        CommunityData = DummyCommunityData
+        ContextData = object
+        ObjectIdentity = DummyObjectIdentity
+        ObjectType = DummyObjectType
+        SnmpEngine = object
+        UdpTransportTarget = DummyUdpTransportTarget
+        getCmd = staticmethod(dummy_getCmd)
+
+    sys.modules["pysnmp.hlapi"] = DummyHLAPI
+
+    client.post("/assets", json={"id": "sw-01", "name": "sw-01", "asset_type": "network", "location": "R6"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-snmp",
+            name="snmp target",
+            address="10.0.0.40",
+            collector_type=main_module.CollectorType.snmp,
+            port=161,
+            username="ignored",
+            password="ignored",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="sw-01",
+            snmp_community="public",
+            snmp_version="2c",
+            snmp_oids="1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_snmp_snapshot(target, "10")
+    assert int(cursor) >= 11
+    assert len(rows) == 2
+    assert rows[0]["metric"].startswith("snmp_")
+    assert rows[0]["value"] is not None
 

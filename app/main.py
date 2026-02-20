@@ -73,7 +73,7 @@ def ui_collectors() -> str:
     for c in service.list_collector_targets():
         rows.append(
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
-            f"<td>{c.username}</td><td>{c.winrm_transport}, logs={c.winrm_event_logs}, batch={c.winrm_batch_size}, https={'yes' if c.winrm_use_https else 'no'}</td>"
+            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
             f"<td><form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0'><button type='submit'>Delete</button></form></td></tr>"
         )
@@ -108,6 +108,17 @@ def ui_collectors() -> str:
         <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
         <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
         <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label><br/><br/>
+        <label>SSH metrics command <input name='ssh_metrics_command' value='cat /proc/loadavg' /></label><br/><br/>
+        <label>SSH log path <input name='ssh_log_path' value='/var/log/syslog' /></label><br/><br/>
+        <label>SSH tail lines <input name='ssh_tail_lines' type='number' value='50' min='1' max='500' /></label><br/><br/>
+        <label>SNMP community <input name='snmp_community' value='public' /></label><br/><br/>
+        <label>SNMP version
+          <select name='snmp_version'>
+            <option value='2c'>2c</option>
+            <option value='3'>3</option>
+          </select>
+        </label><br/><br/>
+        <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label><br/><br/>
         <label>Asset
           <select name='asset_id' required>{asset_options}</select>
         </label><br/><br/>
@@ -141,6 +152,12 @@ def ui_collectors_submit(
     winrm_batch_size: int = Form(50),
     winrm_use_https: str | None = Form(None),
     winrm_validate_tls: str | None = Form(None),
+    ssh_metrics_command: str = Form("cat /proc/loadavg"),
+    ssh_log_path: str = Form("/var/log/syslog"),
+    ssh_tail_lines: int = Form(50),
+    snmp_community: str = Form("public"),
+    snmp_version: str = Form("2c"),
+    snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
     target = CollectorTarget(
@@ -159,6 +176,12 @@ def ui_collectors_submit(
         winrm_batch_size=winrm_batch_size,
         winrm_use_https=winrm_use_https is not None,
         winrm_validate_tls=winrm_validate_tls is not None,
+        ssh_metrics_command=ssh_metrics_command.strip() or "cat /proc/loadavg",
+        ssh_log_path=ssh_log_path.strip() or "/var/log/syslog",
+        ssh_tail_lines=ssh_tail_lines,
+        snmp_community=snmp_community,
+        snmp_version=snmp_version.strip() or "2c",
+        snmp_oids=snmp_oids.strip() or "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
     )
     service.upsert_collector_target(target)
     return RedirectResponse(url="/ui/collectors", status_code=303)
