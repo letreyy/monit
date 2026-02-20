@@ -437,3 +437,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 
 - `WORKER_TICK_SEC` (по умолчанию `2`),
 - `WORKER_TIMEOUT_SEC` (по умолчанию `2`).
+
+## Следующий шаг (реализовано): checkpoint + dedup для worker
+
+Чтобы перейти от демо-режима к стабильному agentless-сбору, добавлено:
+
+- `collector_state` в БД (last_run/success/error/cursor/failure_streak);
+- сохранение состояния после каждого цикла worker;
+- дедупликация событий по fingerprint (одинаковые события не дублируются в хранилище);
+- `/worker/targets` теперь показывает данные из persisted state.
+
+Это база для следующего шага: подключение реальных WinRM/SSH/SNMP collectors с cursor-based чтением.

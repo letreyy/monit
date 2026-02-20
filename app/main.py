@@ -388,7 +388,8 @@ def worker_run_once() -> dict[str, int]:
 @app.post("/events", response_model=Event)
 def register_event(event: Event) -> Event:
     try:
-        return service.register_event(event)
+        stored, _ = service.register_event(event)
+        return stored
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

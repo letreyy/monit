@@ -5,7 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from app.models import CollectorTarget, Event, Severity
+from app.models import CollectorState, CollectorTarget, Event, Severity
 from app.services import MonitoringService
 
 
@@ -24,7 +24,6 @@ class AgentlessWorker:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_run_at: dict[str, float] = {}
-        self._last_result: dict[str, dict[str, str | int | float | bool | None]] = {}
         self._cycle_count = 0
 
     def start(self) -> None:
@@ -45,13 +44,13 @@ class AgentlessWorker:
             "tick_sec": self.tick_sec,
             "timeout_sec": self.timeout_sec,
             "cycle_count": self._cycle_count,
-            "targets_tracked": len(self._last_result),
+            "targets_tracked": len(self.service.list_collector_targets()),
         }
 
     def target_status(self) -> list[dict]:
         rows = []
         for target in self.service.list_collector_targets():
-            state = self._last_result.get(target.id, {})
+            state = self.service.get_collector_state(target.id)
             rows.append(
                 {
                     "target_id": target.id,
@@ -60,11 +59,12 @@ class AgentlessWorker:
                     "address": target.address,
                     "port": target.port,
                     "enabled": target.enabled,
-                    "last_ok": state.get("ok"),
-                    "last_latency_ms": state.get("latency_ms"),
-                    "last_message": state.get("message"),
-                    "last_run_ts": state.get("run_ts"),
-                    "failure_streak": state.get("failure_streak", 0),
+                    "last_ok": state.last_error is None and state.last_run_ts is not None,
+                    "last_message": state.last_error or "ok",
+                    "last_run_ts": state.last_run_ts,
+                    "last_success_ts": state.last_success_ts,
+                    "last_cursor": state.last_cursor,
+                    "failure_streak": state.failure_streak,
                 }
             )
         return rows
@@ -83,9 +83,11 @@ class AgentlessWorker:
                 continue
 
             self._last_run_at[target.id] = now
-            event = self._collect_target(target)
-            self.service.register_event(event)
-            accepted += 1
+            event, state = self._collect_target(target)
+            _, inserted = self.service.register_event(event)
+            if inserted:
+                accepted += 1
+            self.service.upsert_collector_state(state)
         return accepted
 
     def _run_loop(self) -> None:
@@ -96,43 +98,56 @@ class AgentlessWorker:
                 pass
             self._stop_event.wait(self.tick_sec)
 
-    def _collect_target(self, target: CollectorTarget) -> Event:
+    def _collect_target(self, target: CollectorTarget) -> tuple[Event, CollectorState]:
         result = self._probe_tcp(target.address, target.port, self.timeout_sec)
         source = f"agentless_{target.collector_type.value}"
-
-        prev = self._last_result.get(target.id, {})
-        prev_streak = int(prev.get("failure_streak", 0))
-        streak = 0 if result.ok else prev_streak + 1
-
-        self._last_result[target.id] = {
-            "ok": result.ok,
-            "latency_ms": result.latency_ms,
-            "message": result.message,
-            "run_ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "failure_streak": streak,
-        }
+        prev = self.service.get_collector_state(target.id)
+        current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
         if result.ok:
-            return Event(
-                asset_id=target.asset_id,
-                source=source,
-                message=f"Collector target '{target.name}' reachable at {target.address}:{target.port}. {result.message}",
-                metric="collector_latency_ms",
-                value=result.latency_ms,
-                severity=Severity.info,
+            state = CollectorState(
+                target_id=target.id,
+                last_success_ts=current_ts,
+                last_run_ts=current_ts,
+                last_error=None,
+                last_cursor=current_ts,
+                failure_streak=0,
+            )
+            return (
+                Event(
+                    asset_id=target.asset_id,
+                    source=source,
+                    message=f"Collector target '{target.name}' reachable at {target.address}:{target.port}. {result.message}",
+                    metric="collector_latency_ms",
+                    value=result.latency_ms,
+                    severity=Severity.info,
+                ),
+                state,
             )
 
+        streak = prev.failure_streak + 1
+        state = CollectorState(
+            target_id=target.id,
+            last_success_ts=prev.last_success_ts,
+            last_run_ts=current_ts,
+            last_error=result.message,
+            last_cursor=prev.last_cursor,
+            failure_streak=streak,
+        )
         severity = Severity.critical if streak >= 3 else Severity.warning
-        return Event(
-            asset_id=target.asset_id,
-            source=source,
-            message=(
-                f"Collector target '{target.name}' unreachable at {target.address}:{target.port}. "
-                f"{result.message}. failure_streak={streak}"
+        return (
+            Event(
+                asset_id=target.asset_id,
+                source=source,
+                message=(
+                    f"Collector target '{target.name}' unreachable at {target.address}:{target.port}. "
+                    f"{result.message}. failure_streak={streak}"
+                ),
+                metric="collector_failure_streak",
+                value=float(streak),
+                severity=severity,
             ),
-            metric="collector_failure_streak",
-            value=float(streak),
-            severity=severity,
+            state,
         )
 
     @staticmethod

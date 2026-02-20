@@ -1,6 +1,6 @@
 import re
 
-from app.models import Alert, Asset, CollectorTarget, CorrelationInsight, Event, Recommendation, Severity
+from app.models import Alert, Asset, CollectorState, CollectorTarget, CorrelationInsight, Event, Recommendation, Severity
 from app.storage import SQLiteStorage
 
 
@@ -28,7 +28,13 @@ class MonitoringService:
     def delete_collector_target(self, target_id: str) -> None:
         self.storage.delete_collector_target(target_id)
 
-    def register_event(self, event: Event) -> Event:
+    def get_collector_state(self, target_id: str) -> CollectorState:
+        return self.storage.get_collector_state(target_id)
+
+    def upsert_collector_state(self, state: CollectorState) -> CollectorState:
+        return self.storage.upsert_collector_state(state)
+
+    def register_event(self, event: Event) -> tuple[Event, bool]:
         if not self.storage.asset_exists(event.asset_id):
             raise KeyError(f"Unknown asset '{event.asset_id}'")
         return self.storage.insert_event(event)
@@ -36,8 +42,9 @@ class MonitoringService:
     def register_events_batch(self, events: list[Event]) -> int:
         accepted = 0
         for event in events:
-            self.register_event(event)
-            accepted += 1
+            _, inserted = self.register_event(event)
+            if inserted:
+                accepted += 1
         return accepted
 
     def list_events(self, asset_id: str, limit: int = 1000) -> list[Event]:

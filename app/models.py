@@ -43,6 +43,15 @@ class CollectorTarget(BaseModel):
     asset_id: str
 
 
+class CollectorState(BaseModel):
+    target_id: str
+    last_success_ts: str | None = None
+    last_run_ts: str | None = None
+    last_error: str | None = None
+    last_cursor: str | None = None
+    failure_streak: int = 0
+
+
 class Event(BaseModel):
     asset_id: str
     source: str = Field(..., description="linux, idrac, snmp, etc")

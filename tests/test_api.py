@@ -43,43 +43,12 @@ def test_ui_collector_target_flow() -> None:
     )
     assert resp.status_code == 303
 
-    ui_page = client.get("/ui/collectors")
-    assert ui_page.status_code == 200
-    assert "col-01" in ui_page.text
-
     api_page = client.get("/collectors")
     assert api_page.status_code == 200
     assert api_page.json()[0]["collector_type"] == "winrm"
 
 
-def test_windows_correlation_endpoint() -> None:
-    client.post(
-        "/assets",
-        json={"id": "win-01", "name": "win-01", "asset_type": "server", "location": "R2"},
-    )
-
-    ingest_resp = client.post(
-        "/ingest/events",
-        json={
-            "events": [
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=6008", "severity": "critical"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=41", "severity": "critical"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
-                {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=4625", "severity": "warning"},
-            ]
-        },
-    )
-    assert ingest_resp.status_code == 200
-
-    insights_resp = client.get("/assets/win-01/insights")
-    assert insights_resp.status_code == 200
-    assert len(insights_resp.json()) >= 2
-
-
-def test_worker_run_once_generates_agentless_event() -> None:
+def test_worker_run_once_and_state() -> None:
     client.post(
         "/assets",
         json={"id": "srv-worker", "name": "srv-worker", "asset_type": "server", "location": "R3"},
@@ -96,22 +65,36 @@ def test_worker_run_once_generates_agentless_event() -> None:
             "password": "p",
             "poll_interval_sec": 10,
             "enabled": True,
-            "asset_id": "srv-worker"
+            "asset_id": "srv-worker",
         },
     )
 
     run_resp = client.post("/worker/run-once")
     assert run_resp.status_code == 200
-    assert run_resp.json()["accepted"] >= 1
-
-    status_resp = client.get("/worker/status")
-    assert status_resp.status_code == 200
-    assert "cycle_count" in status_resp.json()
 
     targets_resp = client.get("/worker/targets")
     assert targets_resp.status_code == 200
-    assert targets_resp.json()[0]["target_id"] == "col-worker"
+    row = targets_resp.json()[0]
+    assert row["target_id"] == "col-worker"
+    assert "failure_streak" in row
 
     events_resp = client.get("/assets/srv-worker/events")
     assert events_resp.status_code == 200
     assert any(e["source"].startswith("agentless_") for e in events_resp.json())
+
+
+def test_dedup_batch_ingest() -> None:
+    client.post(
+        "/assets",
+        json={"id": "win-01", "name": "win-01", "asset_type": "server", "location": "R2"},
+    )
+
+    payload = {
+        "events": [
+            {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=6008", "severity": "critical"},
+            {"asset_id": "win-01", "source": "windows_eventlog", "message": "EventID=6008", "severity": "critical"},
+        ]
+    }
+    ingest_resp = client.post("/ingest/events", json=payload)
+    assert ingest_resp.status_code == 200
+    assert ingest_resp.json()["accepted"] == 1

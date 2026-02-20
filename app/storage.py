@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
-from app.models import Asset, CollectorTarget, Event
+from app.models import Asset, CollectorState, CollectorTarget, Event
 
 
 class SQLiteStorage:
@@ -40,6 +41,7 @@ class SQLiteStorage:
                     value REAL,
                     severity TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
+                    fingerprint TEXT,
                     FOREIGN KEY(asset_id) REFERENCES assets(id)
                 )
                 """
@@ -61,6 +63,24 @@ class SQLiteStorage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS collector_state (
+                    target_id TEXT PRIMARY KEY,
+                    last_success_ts TEXT,
+                    last_run_ts TEXT,
+                    last_error TEXT,
+                    last_cursor TEXT,
+                    failure_streak INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(target_id) REFERENCES collector_targets(id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)
+                """
+            )
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -79,6 +99,9 @@ class SQLiteStorage:
 
     def delete_asset(self, asset_id: str) -> None:
         with self._connect() as conn:
+            target_rows = conn.execute("SELECT id FROM collector_targets WHERE asset_id = ?", (asset_id,)).fetchall()
+            for row in target_rows:
+                conn.execute("DELETE FROM collector_state WHERE target_id = ?", (row["id"],))
             conn.execute("DELETE FROM events WHERE asset_id = ?", (asset_id,))
             conn.execute("DELETE FROM collector_targets WHERE asset_id = ?", (asset_id,))
             conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
@@ -126,6 +149,13 @@ class SQLiteStorage:
                     target.asset_id,
                 ),
             )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO collector_state(target_id, failure_streak)
+                VALUES(?, 0)
+                """,
+                (target.id,),
+            )
         return target
 
     def list_collector_targets(self) -> list[CollectorTarget]:
@@ -148,14 +178,83 @@ class SQLiteStorage:
 
     def delete_collector_target(self, target_id: str) -> None:
         with self._connect() as conn:
+            conn.execute("DELETE FROM collector_state WHERE target_id = ?", (target_id,))
             conn.execute("DELETE FROM collector_targets WHERE id = ?", (target_id,))
 
-    def insert_event(self, event: Event) -> Event:
+    def upsert_collector_state(self, state: CollectorState) -> CollectorState:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO events(asset_id, source, message, metric, value, severity, timestamp)
-                VALUES(?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO collector_state(target_id, last_success_ts, last_run_ts, last_error, last_cursor, failure_streak)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_id) DO UPDATE SET
+                    last_success_ts=excluded.last_success_ts,
+                    last_run_ts=excluded.last_run_ts,
+                    last_error=excluded.last_error,
+                    last_cursor=excluded.last_cursor,
+                    failure_streak=excluded.failure_streak
+                """,
+                (
+                    state.target_id,
+                    state.last_success_ts,
+                    state.last_run_ts,
+                    state.last_error,
+                    state.last_cursor,
+                    state.failure_streak,
+                ),
+            )
+        return state
+
+    def get_collector_state(self, target_id: str) -> CollectorState:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT target_id, last_success_ts, last_run_ts, last_error, last_cursor, failure_streak
+                FROM collector_state
+                WHERE target_id = ?
+                """,
+                (target_id,),
+            ).fetchone()
+
+        if row:
+            return CollectorState(**dict(row))
+        return CollectorState(target_id=target_id)
+
+    @staticmethod
+    def _fingerprint(event: Event) -> str:
+        basis = "|".join(
+            [
+                event.asset_id,
+                event.source,
+                event.message,
+                event.metric or "",
+                str(event.value) if event.value is not None else "",
+                event.severity.value,
+            ]
+        )
+        return hashlib.sha256(basis.encode("utf-8")).hexdigest()
+
+    def insert_event(self, event: Event, dedup_window_sec: int = 300) -> tuple[Event, bool]:
+        fingerprint = self._fingerprint(event)
+
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT timestamp FROM events
+                WHERE fingerprint = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (fingerprint,),
+            ).fetchone()
+
+            if row:
+                return event, False
+
+            conn.execute(
+                """
+                INSERT INTO events(asset_id, source, message, metric, value, severity, timestamp, fingerprint)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.asset_id,
@@ -165,9 +264,10 @@ class SQLiteStorage:
                     event.value,
                     event.severity.value,
                     event.timestamp.isoformat(),
+                    fingerprint,
                 ),
             )
-        return event
+        return event, True
 
     def list_events(self, asset_id: str, limit: int = 1000) -> list[Event]:
         with self._connect() as conn:
