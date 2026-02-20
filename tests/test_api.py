@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,6 +56,7 @@ def test_ui_collector_target_flow() -> None:
     assert api_page.json()[0]["winrm_use_https"] is True
     assert api_page.json()[0]["winrm_batch_size"] == 25
     assert api_page.json()[0]["password"] == "********"
+    assert api_page.json()[0]["ssh_log_path"] == "/var/log/syslog"
 
 
 def test_worker_run_once_and_state() -> None:
@@ -254,3 +256,69 @@ def test_collector_password_encryption_roundtrip() -> None:
 
     if db_path.exists():
         db_path.unlink()
+
+
+def test_ssh_pull_uses_target_commands_with_mock() -> None:
+    class DummyStream:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def read(self):
+            return self.payload
+
+    class DummySSHClient:
+        last_commands: list[str] = []
+
+        def set_missing_host_key_policy(self, _):
+            return None
+
+        def connect(self, **kwargs):
+            self.kwargs = kwargs
+
+        def exec_command(self, cmd, timeout=None):
+            DummySSHClient.last_commands.append(cmd)
+            if "loadavg" in cmd:
+                return None, DummyStream(b"0.11 0.22 0.33 1/100 111\n"), DummyStream(b"")
+            return None, DummyStream(b"line1\nline2\n"), DummyStream(b"")
+
+        def close(self):
+            return None
+
+    class DummyParamiko:
+        SSHClient = DummySSHClient
+
+        @staticmethod
+        def AutoAddPolicy():
+            return object()
+
+    sys.modules["paramiko"] = DummyParamiko
+
+    client.post(
+        "/assets",
+        json={"id": "linux-01", "name": "linux-01", "asset_type": "server", "location": "R5"},
+    )
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ssh",
+            name="ssh target",
+            address="10.0.0.30",
+            collector_type=main_module.CollectorType.ssh,
+            port=22,
+            username="u",
+            password="p",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="linux-01",
+            ssh_metrics_command="cat /proc/loadavg",
+            ssh_log_path="/var/log/messages",
+            ssh_tail_lines=2,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ssh_snapshot(target, "5")
+    assert int(cursor) >= 6
+    assert any(r.get("metric") == "load1" for r in rows)
+    assert any("line1" in r.get("message", "") for r in rows)
+    assert DummySSHClient.last_commands[0] == "cat /proc/loadavg"
+    assert DummySSHClient.last_commands[1] == "tail -n 2 /var/log/messages"
+

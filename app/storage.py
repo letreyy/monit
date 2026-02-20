@@ -67,6 +67,9 @@ class SQLiteStorage:
                     winrm_validate_tls INTEGER NOT NULL DEFAULT 0,
                     winrm_event_logs TEXT NOT NULL DEFAULT 'System,Application',
                     winrm_batch_size INTEGER NOT NULL DEFAULT 50,
+                    ssh_metrics_command TEXT NOT NULL DEFAULT 'cat /proc/loadavg',
+                    ssh_log_path TEXT NOT NULL DEFAULT '/var/log/syslog',
+                    ssh_tail_lines INTEGER NOT NULL DEFAULT 50,
                     FOREIGN KEY(asset_id) REFERENCES assets(id)
                 )
                 """
@@ -105,6 +108,14 @@ class SQLiteStorage:
             )
         if "winrm_batch_size" not in columns:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN winrm_batch_size INTEGER NOT NULL DEFAULT 50")
+        if "ssh_metrics_command" not in columns:
+            conn.execute(
+                "ALTER TABLE collector_targets ADD COLUMN ssh_metrics_command TEXT NOT NULL DEFAULT 'cat /proc/loadavg'"
+            )
+        if "ssh_log_path" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN ssh_log_path TEXT NOT NULL DEFAULT '/var/log/syslog'")
+        if "ssh_tail_lines" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN ssh_tail_lines INTEGER NOT NULL DEFAULT 50")
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -147,9 +158,10 @@ class SQLiteStorage:
                 INSERT INTO collector_targets(
                     id, name, address, collector_type, port, username, password,
                     poll_interval_sec, enabled, asset_id,
-                    winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size
+                    winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
+                    ssh_metrics_command, ssh_log_path, ssh_tail_lines
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     address=excluded.address,
@@ -164,7 +176,10 @@ class SQLiteStorage:
                     winrm_use_https=excluded.winrm_use_https,
                     winrm_validate_tls=excluded.winrm_validate_tls,
                     winrm_event_logs=excluded.winrm_event_logs,
-                    winrm_batch_size=excluded.winrm_batch_size
+                    winrm_batch_size=excluded.winrm_batch_size,
+                    ssh_metrics_command=excluded.ssh_metrics_command,
+                    ssh_log_path=excluded.ssh_log_path,
+                    ssh_tail_lines=excluded.ssh_tail_lines
                 """,
                 (
                     target.id,
@@ -182,6 +197,9 @@ class SQLiteStorage:
                     1 if target.winrm_validate_tls else 0,
                     target.winrm_event_logs,
                     target.winrm_batch_size,
+                    target.ssh_metrics_command,
+                    target.ssh_log_path,
+                    target.ssh_tail_lines,
                 ),
             )
             conn.execute(
@@ -199,7 +217,8 @@ class SQLiteStorage:
                 """
                 SELECT id, name, address, collector_type, port, username, password,
                        poll_interval_sec, enabled, asset_id,
-                       winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size
+                       winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
+                       ssh_metrics_command, ssh_log_path, ssh_tail_lines
                 FROM collector_targets
                 ORDER BY id
                 """

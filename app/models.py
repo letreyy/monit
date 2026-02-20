@@ -46,6 +46,9 @@ class CollectorTarget(BaseModel):
     winrm_validate_tls: bool = False
     winrm_event_logs: str = "System,Application"
     winrm_batch_size: int = Field(default=50, ge=1, le=500)
+    ssh_metrics_command: str = "cat /proc/loadavg"
+    ssh_log_path: str = "/var/log/syslog"
+    ssh_tail_lines: int = Field(default=50, ge=1, le=500)
 
 
 class CollectorTargetPublic(BaseModel):
@@ -64,6 +67,9 @@ class CollectorTargetPublic(BaseModel):
     winrm_validate_tls: bool
     winrm_event_logs: str
     winrm_batch_size: int
+    ssh_metrics_command: str
+    ssh_log_path: str
+    ssh_tail_lines: int
 
     @classmethod
     def from_target(cls, target: "CollectorTarget") -> "CollectorTargetPublic":

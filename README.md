@@ -532,3 +532,24 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: **реальный SSH pull** (не только TCP-probe), с выполнением команд для сбора логов/метрик и с checkpoint-логикой, аналогичной WinRM path.
+
+## Следующий шаг (реализовано): реальный SSH pull
+
+Сделан следующий шаг по roadmap: для `ssh` collector target worker больше не ограничивается TCP-probe,
+а выполняет реальный pull данных по SSH:
+
+- подключение к удалённому хосту по `username/password`;
+- выполнение команды метрик (`ssh_metrics_command`, по умолчанию `cat /proc/loadavg`);
+- чтение хвоста системного лога (`tail -n N <ssh_log_path>`);
+- сохранение результатов в события `ssh_metrics` и `ssh_log`;
+- обновление checkpoint (`last_cursor`) и `collector_state`.
+
+Добавлены параметры SSH profile в target:
+
+- `ssh_metrics_command`;
+- `ssh_log_path`;
+- `ssh_tail_lines`.
+
+### Что дальше по плану
+
+Следующий шаг: **реальный SNMP pull** (OID polling + нормализация в метрики/события), чтобы закрыть третий protocol path.

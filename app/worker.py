@@ -182,7 +182,78 @@ class AgentlessWorker:
         return events, state
 
     def _collect_ssh_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
-        return self._collect_probe_target(target, "ssh")
+        prev = self.service.get_collector_state(target.id)
+        current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        try:
+            rows, next_cursor = self._pull_ssh_snapshot(target, prev.last_cursor)
+        except Exception as exc:
+            streak = prev.failure_streak + 1
+            state = CollectorState(
+                target_id=target.id,
+                last_success_ts=prev.last_success_ts,
+                last_run_ts=current_ts,
+                last_error=f"ssh pull failed: {exc}",
+                last_cursor=prev.last_cursor,
+                failure_streak=streak,
+            )
+            severity = Severity.critical if streak >= 3 else Severity.warning
+            return (
+                [
+                    Event(
+                        asset_id=target.asset_id,
+                        source="agentless_ssh",
+                        message=f"[ssh] pull failed for '{target.name}': {exc}",
+                        metric="collector_failure_streak",
+                        value=float(streak),
+                        severity=severity,
+                    )
+                ],
+                state,
+            )
+
+        events: list[Event] = []
+        for row in rows:
+            if row.get("kind") == "metric":
+                events.append(
+                    Event(
+                        asset_id=target.asset_id,
+                        source="ssh_metrics",
+                        message=row.get("message", "ssh metric"),
+                        metric=row.get("metric"),
+                        value=row.get("value"),
+                        severity=Severity.info,
+                    )
+                )
+            else:
+                events.append(
+                    Event(
+                        asset_id=target.asset_id,
+                        source="ssh_log",
+                        message=row.get("message", "ssh log line"),
+                        severity=Severity.info,
+                    )
+                )
+
+        if not events:
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="agentless_ssh",
+                    message=f"[ssh] no new data for '{target.name}', cursor={next_cursor}",
+                    severity=Severity.info,
+                )
+            )
+
+        state = CollectorState(
+            target_id=target.id,
+            last_success_ts=current_ts,
+            last_run_ts=current_ts,
+            last_error=None,
+            last_cursor=next_cursor,
+            failure_streak=0,
+        )
+        return events, state
 
     def _collect_snmp_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
         return self._collect_probe_target(target, "snmp")
@@ -241,6 +312,61 @@ class AgentlessWorker:
             ],
             state,
         )
+
+    def _pull_ssh_snapshot(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[dict], str]:
+        try:
+            import paramiko  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("paramiko is not installed") from exc
+
+        cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                hostname=target.address,
+                port=target.port,
+                username=target.username,
+                password=target.password,
+                timeout=self.timeout_sec,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+
+            rows: list[dict] = []
+            metrics_cmd = target.ssh_metrics_command.strip() or "cat /proc/loadavg"
+            _, stdout, _ = client.exec_command(metrics_cmd, timeout=self.timeout_sec)
+            metrics_raw = stdout.read().decode("utf-8", errors="ignore").strip()
+            if metrics_raw:
+                first = metrics_raw.splitlines()[0]
+                parts = first.split()
+                if len(parts) >= 3:
+                    for i, metric_name in enumerate(("load1", "load5", "load15")):
+                        try:
+                            rows.append(
+                                {
+                                    "kind": "metric",
+                                    "metric": metric_name,
+                                    "value": float(parts[i]),
+                                    "message": f"SSH metric {metric_name}={parts[i]}",
+                                }
+                            )
+                        except ValueError:
+                            pass
+                else:
+                    rows.append({"kind": "log", "message": f"[ssh metrics] {first}"})
+
+            tail_lines = max(1, min(target.ssh_tail_lines, 500))
+            log_cmd = f"tail -n {tail_lines} {target.ssh_log_path}"
+            _, stdout, _ = client.exec_command(log_cmd, timeout=self.timeout_sec)
+            log_raw = stdout.read().decode("utf-8", errors="ignore")
+            for line in [ln.strip() for ln in log_raw.splitlines() if ln.strip()]:
+                rows.append({"kind": "log", "message": f"[ssh log] {line}"})
+
+            next_cursor = str(max(cursor + 1, int(time.time())))
+            return rows, next_cursor
+        finally:
+            client.close()
 
     def _pull_winrm_records(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[dict], str]:
         try:
