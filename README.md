@@ -477,3 +477,41 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 Зависимость для этого пути: `pywinrm` (добавлена в `requirements.txt`).
 
 Если WinRM недоступен/не настроен, worker пишет диагностическое событие об ошибке pull и увеличивает `failure_streak`.
+
+## Следующий шаг (реализовано): настраиваемый WinRM pull profile
+
+Добавили параметры WinRM-коллектора, чтобы реальный pull можно было тонко настроить под вашу среду:
+
+- `winrm_transport` (`ntlm`/`basic`/`kerberos`);
+- `winrm_use_https` (использовать `https://.../wsman`);
+- `winrm_validate_tls` (проверка TLS-сертификата сервера);
+- `winrm_event_logs` (каналы через запятую, например `System,Application,Security`);
+- `winrm_batch_size` (сколько событий за один pull).
+
+Где это доступно:
+
+- UI: `/ui/collectors` (новые поля в форме);
+- API: `POST /collectors` (те же поля в JSON);
+- worker использует эти параметры напрямую в `pywinrm.Session` и PowerShell `Get-WinEvent` запросе.
+
+Пример JSON для `POST /collectors`:
+
+```json
+{
+  "id": "win-host-01",
+  "name": "Windows DC collector",
+  "address": "10.10.20.15",
+  "collector_type": "winrm",
+  "port": 5986,
+  "username": "DOMAIN\\svc-monitor",
+  "password": "***",
+  "poll_interval_sec": 60,
+  "enabled": true,
+  "asset_id": "srv-dc-01",
+  "winrm_transport": "kerberos",
+  "winrm_use_https": true,
+  "winrm_validate_tls": true,
+  "winrm_event_logs": "System,Security",
+  "winrm_batch_size": 100
+}
+```

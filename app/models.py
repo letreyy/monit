@@ -41,6 +41,11 @@ class CollectorTarget(BaseModel):
     poll_interval_sec: int = Field(default=60, ge=10)
     enabled: bool = True
     asset_id: str
+    winrm_transport: str = "ntlm"
+    winrm_use_https: bool = False
+    winrm_validate_tls: bool = False
+    winrm_event_logs: str = "System,Application"
+    winrm_batch_size: int = Field(default=50, ge=1, le=500)
 
 
 class CollectorState(BaseModel):

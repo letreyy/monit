@@ -72,10 +72,11 @@ def ui_collectors() -> str:
     for c in service.list_collector_targets():
         rows.append(
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
-            f"<td>{c.username}</td><td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
+            f"<td>{c.username}</td><td>{c.winrm_transport}, logs={c.winrm_event_logs}, batch={c.winrm_batch_size}, https={'yes' if c.winrm_use_https else 'no'}</td>"
+            f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
             f"<td><form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0'><button type='submit'>Delete</button></form></td></tr>"
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='8'>No collector targets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='9'>No collector targets yet</td></tr>"
 
     return f"""
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
@@ -95,6 +96,17 @@ def ui_collectors() -> str:
         <label>Port <input name='port' type='number' value='5985' required /></label><br/><br/>
         <label>Username <input name='username' required /></label><br/><br/>
         <label>Password <input name='password' type='password' required /></label><br/><br/>
+        <label>WinRM transport
+          <select name='winrm_transport'>
+            <option value='ntlm'>ntlm</option>
+            <option value='basic'>basic</option>
+            <option value='kerberos'>kerberos</option>
+          </select>
+        </label><br/><br/>
+        <label>WinRM logs (comma separated) <input name='winrm_event_logs' value='System,Application' /></label><br/><br/>
+        <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
+        <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
+        <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label><br/><br/>
         <label>Asset
           <select name='asset_id' required>{asset_options}</select>
         </label><br/><br/>
@@ -104,7 +116,7 @@ def ui_collectors() -> str:
       </form>
       <h2>Configured targets</h2>
       <table border='1' cellpadding='8' cellspacing='0'>
-        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Address</th><th>User</th><th>Asset</th><th>Enabled</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Address</th><th>User</th><th>WinRM options</th><th>Asset</th><th>Enabled</th><th>Actions</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
       <p><i>Next step: scheduler/worker will auto-poll enabled targets using these settings.</i></p>
@@ -123,6 +135,11 @@ def ui_collectors_submit(
     password: str = Form(...),
     asset_id: str = Form(...),
     poll_interval_sec: int = Form(60),
+    winrm_transport: str = Form("ntlm"),
+    winrm_event_logs: str = Form("System,Application"),
+    winrm_batch_size: int = Form(50),
+    winrm_use_https: str | None = Form(None),
+    winrm_validate_tls: str | None = Form(None),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
     target = CollectorTarget(
@@ -136,6 +153,11 @@ def ui_collectors_submit(
         asset_id=asset_id.strip(),
         poll_interval_sec=poll_interval_sec,
         enabled=enabled is not None,
+        winrm_transport=winrm_transport.strip() or "ntlm",
+        winrm_event_logs=winrm_event_logs.strip() or "System,Application",
+        winrm_batch_size=winrm_batch_size,
+        winrm_use_https=winrm_use_https is not None,
+        winrm_validate_tls=winrm_validate_tls is not None,
     )
     service.upsert_collector_target(target)
     return RedirectResponse(url="/ui/collectors", status_code=303)

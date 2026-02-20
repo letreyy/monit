@@ -60,6 +60,11 @@ class SQLiteStorage:
                     poll_interval_sec INTEGER NOT NULL,
                     enabled INTEGER NOT NULL,
                     asset_id TEXT NOT NULL,
+                    winrm_transport TEXT NOT NULL DEFAULT 'ntlm',
+                    winrm_use_https INTEGER NOT NULL DEFAULT 0,
+                    winrm_validate_tls INTEGER NOT NULL DEFAULT 0,
+                    winrm_event_logs TEXT NOT NULL DEFAULT 'System,Application',
+                    winrm_batch_size INTEGER NOT NULL DEFAULT 50,
                     FOREIGN KEY(asset_id) REFERENCES assets(id)
                 )
                 """
@@ -82,6 +87,22 @@ class SQLiteStorage:
                 CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)
                 """
             )
+            self._ensure_collector_target_columns(conn)
+
+    def _ensure_collector_target_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(collector_targets)").fetchall()}
+        if "winrm_transport" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN winrm_transport TEXT NOT NULL DEFAULT 'ntlm'")
+        if "winrm_use_https" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN winrm_use_https INTEGER NOT NULL DEFAULT 0")
+        if "winrm_validate_tls" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN winrm_validate_tls INTEGER NOT NULL DEFAULT 0")
+        if "winrm_event_logs" not in columns:
+            conn.execute(
+                "ALTER TABLE collector_targets ADD COLUMN winrm_event_logs TEXT NOT NULL DEFAULT 'System,Application'"
+            )
+        if "winrm_batch_size" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN winrm_batch_size INTEGER NOT NULL DEFAULT 50")
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -123,9 +144,10 @@ class SQLiteStorage:
                 """
                 INSERT INTO collector_targets(
                     id, name, address, collector_type, port, username, password,
-                    poll_interval_sec, enabled, asset_id
+                    poll_interval_sec, enabled, asset_id,
+                    winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     address=excluded.address,
@@ -135,7 +157,12 @@ class SQLiteStorage:
                     password=excluded.password,
                     poll_interval_sec=excluded.poll_interval_sec,
                     enabled=excluded.enabled,
-                    asset_id=excluded.asset_id
+                    asset_id=excluded.asset_id,
+                    winrm_transport=excluded.winrm_transport,
+                    winrm_use_https=excluded.winrm_use_https,
+                    winrm_validate_tls=excluded.winrm_validate_tls,
+                    winrm_event_logs=excluded.winrm_event_logs,
+                    winrm_batch_size=excluded.winrm_batch_size
                 """,
                 (
                     target.id,
@@ -148,6 +175,11 @@ class SQLiteStorage:
                     target.poll_interval_sec,
                     1 if target.enabled else 0,
                     target.asset_id,
+                    target.winrm_transport,
+                    1 if target.winrm_use_https else 0,
+                    1 if target.winrm_validate_tls else 0,
+                    target.winrm_event_logs,
+                    target.winrm_batch_size,
                 ),
             )
             conn.execute(
@@ -164,7 +196,8 @@ class SQLiteStorage:
             rows = conn.execute(
                 """
                 SELECT id, name, address, collector_type, port, username, password,
-                       poll_interval_sec, enabled, asset_id
+                       poll_interval_sec, enabled, asset_id,
+                       winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size
                 FROM collector_targets
                 ORDER BY id
                 """
@@ -174,6 +207,8 @@ class SQLiteStorage:
         for row in rows:
             data = dict(row)
             data["enabled"] = bool(data["enabled"])
+            data["winrm_use_https"] = bool(data["winrm_use_https"])
+            data["winrm_validate_tls"] = bool(data["winrm_validate_tls"])
             result.append(CollectorTarget(**data))
         return result
 

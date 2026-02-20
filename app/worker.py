@@ -249,15 +249,29 @@ class AgentlessWorker:
             raise RuntimeError("pywinrm is not installed") from exc
 
         cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
+        channels = [c.strip() for c in target.winrm_event_logs.split(",") if c.strip()]
+        if not channels:
+            channels = ["System", "Application"]
+        channels_ps = ",".join("'" + c.replace("'", "''") + "'" for c in channels)
+        batch_size = max(1, min(target.winrm_batch_size, 500))
+
         ps = f"""
 $last = {cursor}
-$events = Get-WinEvent -FilterHashtable @{{LogName=@('System','Application')}} -ErrorAction SilentlyContinue |
+$events = Get-WinEvent -FilterHashtable @{{LogName=@({channels_ps})}} -ErrorAction SilentlyContinue |
     Where-Object {{ $_.RecordId -gt $last }} |
-    Select-Object -First 50 RecordId,Id,LogName,ProviderName,LevelDisplayName,TimeCreated,Message
+    Sort-Object RecordId |
+    Select-Object -First {batch_size} RecordId,Id,LogName,ProviderName,LevelDisplayName,TimeCreated,Message
 $events | ConvertTo-Json -Depth 4 -Compress
 """
-        endpoint = f"http://{target.address}:{target.port}/wsman"
-        session = winrm.Session(endpoint, auth=(target.username, target.password), transport="ntlm")
+        scheme = "https" if target.winrm_use_https else "http"
+        endpoint = f"{scheme}://{target.address}:{target.port}/wsman"
+        transport = target.winrm_transport.strip().lower() or "ntlm"
+        session = winrm.Session(
+            endpoint,
+            auth=(target.username, target.password),
+            transport=transport,
+            server_cert_validation="validate" if target.winrm_validate_tls else "ignore",
+        )
         result = session.run_ps(ps)
         if result.status_code != 0:
             err = (result.std_err or b"").decode("utf-8", errors="ignore")

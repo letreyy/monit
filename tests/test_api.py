@@ -37,6 +37,10 @@ def test_ui_collector_target_flow() -> None:
             "password": "secret",
             "asset_id": "srv-01",
             "poll_interval_sec": "60",
+            "winrm_transport": "basic",
+            "winrm_event_logs": "System,Application,Security",
+            "winrm_batch_size": "25",
+            "winrm_use_https": "on",
             "enabled": "on",
         },
         follow_redirects=False,
@@ -46,6 +50,9 @@ def test_ui_collector_target_flow() -> None:
     api_page = client.get("/collectors")
     assert api_page.status_code == 200
     assert api_page.json()[0]["collector_type"] == "winrm"
+    assert api_page.json()[0]["winrm_transport"] == "basic"
+    assert api_page.json()[0]["winrm_use_https"] is True
+    assert api_page.json()[0]["winrm_batch_size"] == 25
 
 
 def test_worker_run_once_and_state() -> None:
@@ -99,6 +106,63 @@ def test_dedup_batch_ingest() -> None:
     assert ingest_resp.status_code == 200
     assert ingest_resp.json()["accepted"] == 1
 
+
+
+
+def test_winrm_pull_uses_target_options() -> None:
+    class DummyResult:
+        status_code = 0
+        std_err = b""
+        std_out = b'{"RecordId": 20, "Id": 1, "LogName": "Security", "ProviderName": "Test", "LevelDisplayName": "Information", "Message": "ok"}'
+
+    class DummySession:
+        def __init__(self, endpoint, auth, transport, server_cert_validation):
+            self.endpoint = endpoint
+            self.auth = auth
+            self.transport = transport
+            self.server_cert_validation = server_cert_validation
+
+        def run_ps(self, ps):
+            DummyWinRM.last_ps = ps
+            return DummyResult()
+
+    class DummyWinRM:
+        last_ps = ""
+        Session = DummySession
+
+    import sys
+
+    sys.modules["winrm"] = DummyWinRM
+    client.post(
+        "/assets",
+        json={"id": "win-cursor", "name": "win-cursor", "asset_type": "server", "location": "R9"},
+    )
+
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-opt",
+            name="opt",
+            address="10.0.0.10",
+            collector_type=main_module.CollectorType.winrm,
+            port=5986,
+            username="u",
+            password="p",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="win-cursor",
+            winrm_transport="kerberos",
+            winrm_use_https=True,
+            winrm_validate_tls=True,
+            winrm_event_logs="Security",
+            winrm_batch_size=10,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_winrm_records(target, "19")
+    assert cursor == "20"
+    assert rows[0]["LogName"] == "Security"
+    assert "LogName=@('Security')" in DummyWinRM.last_ps
+    assert "Select-Object -First 10" in DummyWinRM.last_ps
 
 def test_winrm_real_pull_path_with_mock() -> None:
     client.post(
