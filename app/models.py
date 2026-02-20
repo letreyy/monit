@@ -134,3 +134,13 @@ class CorrelationInsight(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
     evidence_count: int = Field(..., ge=1)
     recommendation: str
+
+
+class WorkerHistoryEntry(BaseModel):
+    ts: str
+    target_id: str
+    collector_type: str
+    accepted_events: int
+    last_error: str | None = None
+    failure_streak: int = 0
+    last_cursor: str | None = None

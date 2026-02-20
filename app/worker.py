@@ -4,11 +4,10 @@ import json
 import socket
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
 
-from app.models import CollectorState, CollectorTarget, Event, Severity
+from app.models import CollectorState, CollectorTarget, Event, Severity, WorkerHistoryEntry
 from app.services import MonitoringService
 
 
@@ -28,7 +27,6 @@ class AgentlessWorker:
         self._thread: threading.Thread | None = None
         self._last_run_at: dict[str, float] = {}
         self._cycle_count = 0
-        self._history: deque[dict] = deque(maxlen=500)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -74,12 +72,22 @@ class AgentlessWorker:
         return rows
 
 
-    def history(self, limit: int = 100) -> list[dict]:
-        limit = max(1, min(limit, 500))
-        return list(self._history)[-limit:][::-1]
-
-    def _append_history(self, entry: dict) -> None:
-        self._history.append(entry)
+    def history(
+        self,
+        limit: int = 100,
+        target_id: str | None = None,
+        collector_type: str | None = None,
+        has_error: bool | None = None,
+    ) -> list[dict]:
+        return [
+            e.model_dump()
+            for e in self.service.list_worker_history(
+                limit=limit,
+                target_id=target_id,
+                collector_type=collector_type,
+                has_error=has_error,
+            )
+        ]
 
     def run_once(self) -> int:
         accepted = 0
@@ -101,16 +109,16 @@ class AgentlessWorker:
                 if inserted:
                     accepted += 1
             self.service.upsert_collector_state(state)
-            self._append_history(
-                {
-                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "target_id": target.id,
-                    "collector_type": target.collector_type.value,
-                    "accepted_events": len(events),
-                    "last_error": state.last_error,
-                    "failure_streak": state.failure_streak,
-                    "last_cursor": state.last_cursor,
-                }
+            self.service.add_worker_history(
+                WorkerHistoryEntry(
+                    ts=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    target_id=target.id,
+                    collector_type=target.collector_type.value,
+                    accepted_events=len(events),
+                    last_error=state.last_error,
+                    failure_streak=state.failure_streak,
+                    last_cursor=state.last_cursor,
+                )
             )
         return accepted
 

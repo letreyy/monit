@@ -603,3 +603,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: сделать persisted history/telemetry (в SQLite) и добавить фильтры/графики по target на diagnostics-странице.
+
+## Следующий шаг (реализовано): persisted history/telemetry + filters в diagnostics
+
+Сделали следующий шаг из плана:
+
+- история worker теперь сохраняется в SQLite (`worker_history`), а не только в памяти;
+- `GET /worker/history` поддерживает фильтры: `target_id`, `collector_type`, `has_error`;
+- `GET /ui/diagnostics` получил фильтры по target/type/error и работает поверх persisted history.
+
+Это значит, что история не теряется после рестарта контейнера и её можно использовать как базовый telemetry trail для расследования проблем по collector target.
+
+### Что дальше по плану
+
+Следующий шаг: добавить графики/агрегации по истории (ошибки/успехи/accepted events по времени) и экспорт диагностики (CSV/JSON dump) из UI.

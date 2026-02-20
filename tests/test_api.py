@@ -454,9 +454,48 @@ def test_worker_history_endpoint_has_rows_after_run_once() -> None:
     assert len(payload) >= 1
     assert payload[0]["target_id"] == "col-hist"
 
+    filtered = client.get("/worker/history?limit=5&target_id=col-hist&collector_type=ssh").json()
+    assert len(filtered) >= 1
+    assert all(row["target_id"] == "col-hist" for row in filtered)
+    assert all(row["collector_type"] == "ssh" for row in filtered)
+
 
 def test_ui_diagnostics_page() -> None:
-    resp = client.get("/ui/diagnostics")
+    resp = client.get("/ui/diagnostics?collector_type=ssh&has_error=1")
     assert resp.status_code == 200
     assert "Worker diagnostics" in resp.text
     assert "/worker/history" in resp.text
+    assert "Apply" in resp.text
+
+
+def test_worker_history_persists_in_storage() -> None:
+    db_path = Path("data/test_history.db")
+    if db_path.exists():
+        db_path.unlink()
+
+    storage = SQLiteStorage(str(db_path))
+    service = MonitoringService(storage)
+    worker = AgentlessWorker(service)
+
+    service.upsert_asset(main_module.Asset(id="srv-p", name="srv-p", asset_type=main_module.AssetType.server))
+    service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-p",
+            name="persist",
+            address="127.0.0.1",
+            collector_type=main_module.CollectorType.ssh,
+            port=1,
+            username="u",
+            password="p",
+            poll_interval_sec=10,
+            enabled=True,
+            asset_id="srv-p",
+        )
+    )
+
+    worker.run_once()
+    history = service.list_worker_history(limit=10, target_id="col-p")
+    assert len(history) >= 1
+
+    if db_path.exists():
+        db_path.unlink()

@@ -1,6 +1,16 @@
 import re
 
-from app.models import Alert, Asset, CollectorState, CollectorTarget, CorrelationInsight, Event, Recommendation, Severity
+from app.models import (
+    Alert,
+    Asset,
+    CollectorState,
+    CollectorTarget,
+    CorrelationInsight,
+    Event,
+    Recommendation,
+    Severity,
+    WorkerHistoryEntry,
+)
 from app.storage import SQLiteStorage
 
 
@@ -33,6 +43,24 @@ class MonitoringService:
 
     def upsert_collector_state(self, state: CollectorState) -> CollectorState:
         return self.storage.upsert_collector_state(state)
+
+
+    def add_worker_history(self, entry: WorkerHistoryEntry) -> WorkerHistoryEntry:
+        return self.storage.insert_worker_history(entry)
+
+    def list_worker_history(
+        self,
+        limit: int = 100,
+        target_id: str | None = None,
+        collector_type: str | None = None,
+        has_error: bool | None = None,
+    ) -> list[WorkerHistoryEntry]:
+        return self.storage.list_worker_history(
+            limit=limit,
+            target_id=target_id,
+            collector_type=collector_type,
+            has_error=has_error,
+        )
 
     def register_event(self, event: Event) -> tuple[Event, bool]:
         if not self.storage.asset_exists(event.asset_id):

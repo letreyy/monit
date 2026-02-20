@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import Asset, CollectorState, CollectorTarget, Event
+from app.models import Asset, CollectorState, CollectorTarget, Event, WorkerHistoryEntry
 from app.security import SecretCodec, build_secret_codec
 
 
@@ -92,7 +92,27 @@ class SQLiteStorage:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS worker_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    collector_type TEXT NOT NULL,
+                    accepted_events INTEGER NOT NULL,
+                    last_error TEXT,
+                    failure_streak INTEGER NOT NULL,
+                    last_cursor TEXT,
+                    FOREIGN KEY(target_id) REFERENCES collector_targets(id)
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_worker_history_ts ON worker_history(ts)
                 """
             )
             self._ensure_collector_target_columns(conn)
@@ -297,6 +317,60 @@ class SQLiteStorage:
         if row:
             return CollectorState(**dict(row))
         return CollectorState(target_id=target_id)
+
+
+    def insert_worker_history(self, entry: WorkerHistoryEntry) -> WorkerHistoryEntry:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO worker_history(ts, target_id, collector_type, accepted_events, last_error, failure_streak, last_cursor)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.ts,
+                    entry.target_id,
+                    entry.collector_type,
+                    entry.accepted_events,
+                    entry.last_error,
+                    entry.failure_streak,
+                    entry.last_cursor,
+                ),
+            )
+        return entry
+
+    def list_worker_history(
+        self,
+        limit: int = 100,
+        target_id: str | None = None,
+        collector_type: str | None = None,
+        has_error: bool | None = None,
+    ) -> list[WorkerHistoryEntry]:
+        where: list[str] = []
+        params: list[object] = []
+        if target_id:
+            where.append("target_id = ?")
+            params.append(target_id)
+        if collector_type:
+            where.append("collector_type = ?")
+            params.append(collector_type)
+        if has_error is True:
+            where.append("last_error IS NOT NULL")
+        elif has_error is False:
+            where.append("last_error IS NULL")
+
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        q = f"""
+            SELECT ts, target_id, collector_type, accepted_events, last_error, failure_streak, last_cursor
+            FROM worker_history
+            {where_sql}
+            ORDER BY id DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(limit, 1000)))
+
+        with self._connect() as conn:
+            rows = conn.execute(q, tuple(params)).fetchall()
+        return [WorkerHistoryEntry(**dict(r)) for r in rows]
 
     @staticmethod
     def _fingerprint(event: Event) -> str:

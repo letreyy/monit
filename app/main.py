@@ -372,13 +372,38 @@ def worker_health() -> dict[str, int | str | bool]:
 
 
 @app.get("/worker/history")
-def worker_history(limit: int = 100) -> list[dict]:
-    return worker.history(limit=limit)
+def worker_history(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: bool | None = None,
+) -> list[dict]:
+    return worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error,
+    )
 
 
 @app.get("/ui/diagnostics", response_class=HTMLResponse)
-def ui_diagnostics() -> str:
-    history = worker.history(limit=100)
+def ui_diagnostics(
+    target_id: str = "",
+    collector_type: str = "",
+    has_error: str = "",
+) -> str:
+    has_error_value: bool | None = None
+    if has_error == "1":
+        has_error_value = True
+    elif has_error == "0":
+        has_error_value = False
+
+    history = worker.history(
+        limit=100,
+        target_id=target_id.strip() or None,
+        collector_type=collector_type.strip() or None,
+        has_error=has_error_value,
+    )
     rows = []
     for row in history:
         rows.append(
@@ -391,6 +416,25 @@ def ui_diagnostics() -> str:
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
       <h1>Worker diagnostics</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a></p>
+      <form method='get' action='/ui/diagnostics' style='margin: 10px 0;'>
+        <label>Target ID <input name='target_id' value='{target_id}' /></label>
+        <label>Type
+          <select name='collector_type'>
+            <option value='' {'selected' if not collector_type else ''}>all</option>
+            <option value='winrm' {'selected' if collector_type == 'winrm' else ''}>winrm</option>
+            <option value='ssh' {'selected' if collector_type == 'ssh' else ''}>ssh</option>
+            <option value='snmp' {'selected' if collector_type == 'snmp' else ''}>snmp</option>
+          </select>
+        </label>
+        <label>Error
+          <select name='has_error'>
+            <option value='' {'selected' if has_error == '' else ''}>all</option>
+            <option value='1' {'selected' if has_error == '1' else ''}>only errors</option>
+            <option value='0' {'selected' if has_error == '0' else ''}>only ok</option>
+          </select>
+        </label>
+        <button type='submit'>Apply</button>
+      </form>
       <table border='1' cellpadding='8' cellspacing='0'>
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
         <tbody>{rows_html}</tbody>
