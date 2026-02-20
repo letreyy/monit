@@ -6,14 +6,30 @@ param(
     [int]$LookbackMinutes = 5
 )
 
+function Send-JsonUtf8 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][object]$Payload
+    )
+
+    $json = $Payload | ConvertTo-Json -Depth 8 -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+
+    Invoke-RestMethod \
+        -Uri $Uri \
+        -Method Post \
+        -Body $bytes \
+        -ContentType "application/json; charset=utf-8" | Out-Null
+}
+
 $assetBody = @{
     id = $AssetId
     name = $AssetId
     asset_type = "server"
     location = $Location
-} | ConvertTo-Json
+}
 
-Invoke-RestMethod -Uri "$Api/assets" -Method Post -Body $assetBody -ContentType "application/json" | Out-Null
+Send-JsonUtf8 -Uri "$Api/assets" -Payload $assetBody
 
 while ($true) {
     $startTime = (Get-Date).AddMinutes(-$LookbackMinutes)
@@ -28,18 +44,23 @@ while ($true) {
         if ($log.LevelDisplayName -match "Error|Warning") { $sev = "warning" }
         if ($log.LevelDisplayName -match "Critical") { $sev = "critical" }
 
+        $logName = if ([string]::IsNullOrWhiteSpace($log.LogName)) { "Unknown" } else { $log.LogName }
+        $eventId = if ($null -eq $log.Id) { "Unknown" } else { $log.Id }
+        $provider = if ([string]::IsNullOrWhiteSpace($log.ProviderName)) { "Unknown" } else { $log.ProviderName }
+        $msg = if ([string]::IsNullOrWhiteSpace($log.Message)) { "(no message)" } else { $log.Message }
+
         $events += @{
             asset_id = $AssetId
             source = "windows_eventlog"
-            message = "[$($log.LogName)] EventID=$($log.Id) Provider=$($log.ProviderName) :: $($log.Message)"
+            message = "[$logName] EventID=$eventId Provider=$provider :: $msg"
             severity = $sev
             timestamp = (Get-Date).ToUniversalTime().ToString("o")
         }
     }
 
     if ($events.Count -gt 0) {
-        $batch = @{ events = $events } | ConvertTo-Json -Depth 5
-        Invoke-RestMethod -Uri "$Api/ingest/events" -Method Post -Body $batch -ContentType "application/json" | Out-Null
+        $batch = @{ events = $events }
+        Send-JsonUtf8 -Uri "$Api/ingest/events" -Payload $batch
         Write-Host "[$(Get-Date -Format o)] Sent $($events.Count) windows events"
     }
 
