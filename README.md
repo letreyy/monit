@@ -515,3 +515,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
   "winrm_batch_size": 100
 }
 ```
+
+## Следующий шаг (реализовано): защита credential'ов collector targets
+
+Сделан шаг по безопасности хранения учётных данных collector targets:
+
+- пароль collector target теперь шифруется при сохранении в SQLite (если задан `APP_SECRET_KEY`);
+- при чтении для worker выполняется расшифровка (для обратной совместимости старые plaintext-значения тоже читаются);
+- `GET /collectors` возвращает маскированный пароль (`********`), чтобы не светить секреты в UI/API-ответах.
+
+Настройка:
+
+- задайте `APP_SECRET_KEY` (Fernet key) в окружении/Portainer;
+- без ключа будет режим passthrough для совместимости (рекомендуется выставить ключ в production).
+
+### Что дальше по плану
+
+Следующий шаг: **реальный SSH pull** (не только TCP-probe), с выполнением команд для сбора логов/метрик и с checkpoint-логикой, аналогичной WinRM path.

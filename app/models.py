@@ -48,6 +48,28 @@ class CollectorTarget(BaseModel):
     winrm_batch_size: int = Field(default=50, ge=1, le=500)
 
 
+class CollectorTargetPublic(BaseModel):
+    id: str
+    name: str
+    address: str
+    collector_type: CollectorType
+    port: int
+    username: str
+    password: str = "********"
+    poll_interval_sec: int
+    enabled: bool
+    asset_id: str
+    winrm_transport: str
+    winrm_use_https: bool
+    winrm_validate_tls: bool
+    winrm_event_logs: str
+    winrm_batch_size: int
+
+    @classmethod
+    def from_target(cls, target: "CollectorTarget") -> "CollectorTargetPublic":
+        return cls(**target.model_dump(exclude={"password"}), password="********")
+
+
 class CollectorState(BaseModel):
     target_id: str
     last_success_ts: str | None = None

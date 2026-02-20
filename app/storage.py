@@ -6,11 +6,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models import Asset, CollectorState, CollectorTarget, Event
+from app.security import SecretCodec, build_secret_codec
 
 
 class SQLiteStorage:
-    def __init__(self, db_path: str = "data/monitor.db") -> None:
+    def __init__(self, db_path: str = "data/monitor.db", secret_codec: SecretCodec | None = None) -> None:
         self.db_path = db_path
+        self.secret_codec = secret_codec or build_secret_codec()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -171,7 +173,7 @@ class SQLiteStorage:
                     target.collector_type.value,
                     target.port,
                     target.username,
-                    target.password,
+                    self.secret_codec.encrypt(target.password),
                     target.poll_interval_sec,
                     1 if target.enabled else 0,
                     target.asset_id,
@@ -209,6 +211,7 @@ class SQLiteStorage:
             data["enabled"] = bool(data["enabled"])
             data["winrm_use_https"] = bool(data["winrm_use_https"])
             data["winrm_validate_tls"] = bool(data["winrm_validate_tls"])
+            data["password"] = self.secret_codec.decrypt(data["password"])
             result.append(CollectorTarget(**data))
         return result
 

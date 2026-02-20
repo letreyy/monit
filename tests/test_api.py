@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -53,6 +54,7 @@ def test_ui_collector_target_flow() -> None:
     assert api_page.json()[0]["winrm_transport"] == "basic"
     assert api_page.json()[0]["winrm_use_https"] is True
     assert api_page.json()[0]["winrm_batch_size"] == 25
+    assert api_page.json()[0]["password"] == "********"
 
 
 def test_worker_run_once_and_state() -> None:
@@ -210,3 +212,45 @@ def test_winrm_real_pull_path_with_mock() -> None:
 
     events_resp = client.get("/assets/win-cursor/events")
     assert any("RecordId=11" in e["message"] for e in events_resp.json())
+
+
+def test_collector_password_encryption_roundtrip() -> None:
+    Fernet = pytest.importorskip("cryptography.fernet").Fernet
+
+    from app.security import FernetSecretCodec
+
+    db_path = Path("data/test_encrypt.db")
+    if db_path.exists():
+        db_path.unlink()
+
+    codec = FernetSecretCodec(Fernet.generate_key().decode("utf-8"))
+    storage = SQLiteStorage(str(db_path), secret_codec=codec)
+    service = MonitoringService(storage)
+
+    service.upsert_asset(main_module.Asset(id="srv-sec", name="srv-sec", asset_type=main_module.AssetType.server))
+    service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-sec",
+            name="secure",
+            address="10.0.0.20",
+            collector_type=main_module.CollectorType.winrm,
+            port=5985,
+            username="admin",
+            password="super-secret",
+            poll_interval_sec=60,
+            enabled=True,
+            asset_id="srv-sec",
+        )
+    )
+
+    # Stored value in DB is encrypted token, not plaintext
+    with storage._connect() as conn:  # noqa: SLF001
+        row = conn.execute("SELECT password FROM collector_targets WHERE id = ?", ("col-sec",)).fetchone()
+    assert row is not None
+    assert row["password"] != "super-secret"
+
+    targets = service.list_collector_targets()
+    assert targets[0].password == "super-secret"
+
+    if db_path.exists():
+        db_path.unlink()

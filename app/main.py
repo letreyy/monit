@@ -9,6 +9,7 @@ from app.models import (
     AssetType,
     CollectorTarget,
     CollectorType,
+    CollectorTargetPublic,
     CorrelationInsight,
     Event,
     EventBatch,
@@ -370,9 +371,9 @@ def upsert_asset(asset: Asset) -> Asset:
     return service.upsert_asset(asset)
 
 
-@app.get("/collectors", response_model=list[CollectorTarget])
-def list_collectors() -> list[CollectorTarget]:
-    return service.list_collector_targets()
+@app.get("/collectors", response_model=list[CollectorTargetPublic])
+def list_collectors() -> list[CollectorTargetPublic]:
+    return [CollectorTargetPublic.from_target(t) for t in service.list_collector_targets()]
 
 
 @app.post("/collectors", response_model=CollectorTarget)
