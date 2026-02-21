@@ -32,6 +32,7 @@ from app.models import (
     Event,
     EventBatch,
     IngestSummary,
+    LogAnalyticsInsight,
     Overview,
     Recommendation,
     Severity,
@@ -2142,6 +2143,38 @@ def list_insights(request: Request, asset_id: str, tenant_id: str | None = None)
         raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.build_correlation_insights(asset_id)
 
+
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics", response_model=LogAnalyticsInsight)
+def get_ai_log_analytics(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    max_clusters: int = 30,
+    max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    tenant_id: str | None = None,
+) -> LogAnalyticsInsight:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+        parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+        return service.build_log_analytics(
+            asset_id,
+            limit=min(max(limit, 20), 2000),
+            max_clusters=min(max(max_clusters, 5), 100),
+            max_anomalies=min(max(max_anomalies, 1), 100),
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
 def get_recommendation(request: Request, asset_id: str, tenant_id: str | None = None) -> Recommendation:

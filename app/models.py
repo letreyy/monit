@@ -136,6 +136,34 @@ class CorrelationInsight(BaseModel):
     recommendation: str
 
 
+class LogCluster(BaseModel):
+    cluster_id: str
+    source: str
+    signature: str
+    example_message: str
+    events_count: int = Field(..., ge=1)
+    share: float = Field(..., ge=0.0, le=1.0)
+    severity_mix: dict[str, int]
+
+
+class LogAnomaly(BaseModel):
+    kind: str
+    severity: Severity
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reason: str
+    evidence: list[str] = Field(default_factory=list)
+    related_cluster_id: str | None = None
+    related_metric: str | None = None
+
+
+class LogAnalyticsInsight(BaseModel):
+    asset_id: str
+    analyzed_events: int = Field(..., ge=0)
+    clusters: list[LogCluster]
+    anomalies: list[LogAnomaly]
+    summary: list[str]
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

@@ -169,6 +169,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 - `POST /events`
 - `GET /assets/{asset_id}/events`
 - `GET /assets/{asset_id}/recommendation`
+- `GET /assets/{asset_id}/ai-log-analytics` (query: `limit`, `max_clusters`, `max_anomalies`, `ignore_sources`, `ignore_signatures`)
 
 ## Интерфейс и автосбор данных
 
@@ -271,4 +272,4 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 ## Что дальше (укрупнённо)
 1. ✅ **OIDC enterprise hardening (базовый пакет)**: issuer-aware claim mapping (`role/scope/groups`) + richer JWT reject analytics (reason + issuer/client details).
 2. ✅ **Compliance automation (базовый пакет)**: scheduled compliance reports + routing stubs + retention/purge policies.
-3. **AI log analytics**: anomaly detection/clusterization + explainable insights поверх текущих rule/correlation механизмов.
+3. ✅ **AI log analytics (базовый пакет)**: anomaly detection/clusterization + explainable insights через API `/assets/{asset_id}/ai-log-analytics`.
