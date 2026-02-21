@@ -364,6 +364,52 @@ def _worker_health_snapshot() -> dict[str, int | str | bool]:
     }
 
 
+def _parse_has_error(has_error: str) -> bool | None:
+    if has_error == "1":
+        return True
+    if has_error == "0":
+        return False
+    return None
+
+
+def _worker_history_summary(history: list[dict]) -> dict[str, int]:
+    total = len(history)
+    errors = sum(1 for r in history if r.get("last_error"))
+    return {
+        "runs": total,
+        "ok": total - errors,
+        "errors": errors,
+        "accepted_events_sum": sum(int(r.get("accepted_events", 0)) for r in history),
+    }
+
+
+def _worker_history_by_type(history: list[dict]) -> list[dict[str, int | str]]:
+    by_type: dict[str, dict[str, int]] = {}
+    for r in history:
+        ctype = str(r.get("collector_type", "unknown"))
+        bucket = by_type.setdefault(ctype, {"ok": 0, "errors": 0})
+        if r.get("last_error"):
+            bucket["errors"] += 1
+        else:
+            bucket["ok"] += 1
+    return [
+        {
+            "collector_type": ctype,
+            "ok": values["ok"],
+            "errors": values["errors"],
+            "runs": values["ok"] + values["errors"],
+        }
+        for ctype, values in sorted(by_type.items())
+    ]
+
+
+def _worker_history_trend(history: list[dict]) -> list[dict[str, int | str]]:
+    return [
+        {"ts": str(r.get("ts", "")), "accepted_events": int(r.get("accepted_events", 0))}
+        for r in history[::-1]
+    ]
+
+
 @app.get("/worker/health")
 def worker_health() -> dict[str, int | str | bool]:
     snap = _worker_health_snapshot()
@@ -384,6 +430,26 @@ def worker_history(
         collector_type=collector_type,
         has_error=has_error,
     )
+
+
+@app.get("/worker/history/summary")
+def worker_history_summary(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: bool | None = None,
+) -> dict:
+    history = worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error,
+    )
+    return {
+        "summary": _worker_history_summary(history),
+        "by_collector_type": _worker_history_by_type(history),
+        "trend": _worker_history_trend(history),
+    }
 
 
 @app.get("/worker/history.csv", response_class=PlainTextResponse)
@@ -422,107 +488,147 @@ def worker_history_csv(
 
 
 @app.get("/ui/diagnostics", response_class=HTMLResponse)
-def ui_diagnostics(
-    target_id: str = "",
-    collector_type: str = "",
-    has_error: str = "",
-) -> str:
-    has_error_value: bool | None = None
-    if has_error == "1":
-        has_error_value = True
-    elif has_error == "0":
-        has_error_value = False
-
-    history = worker.history(
-        limit=100,
-        target_id=target_id.strip() or None,
-        collector_type=collector_type.strip() or None,
-        has_error=has_error_value,
-    )
-    rows = []
-    for row in history:
-        rows.append(
-            f"<tr><td>{row.get('ts')}</td><td>{row.get('target_id')}</td><td>{row.get('collector_type')}</td>"
-            f"<td>{row.get('accepted_events')}</td><td>{row.get('failure_streak')}</td><td>{row.get('last_cursor') or '-'}</td>"
-            f"<td>{row.get('last_error') or '-'}</td></tr>"
-        )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
-
-    total = len(history)
-    errors = sum(1 for r in history if r.get("last_error"))
-    ok = total - errors
-    accepted_sum = sum(int(r.get("accepted_events", 0)) for r in history)
-
-    by_type: dict[str, dict[str, int]] = {}
-    for r in history:
-        ctype = str(r.get("collector_type", "unknown"))
-        bucket = by_type.setdefault(ctype, {"ok": 0, "err": 0})
-        if r.get("last_error"):
-            bucket["err"] += 1
-        else:
-            bucket["ok"] += 1
-
-    bars = []
-    max_total = max((v["ok"] + v["err"] for v in by_type.values()), default=1)
-    for ctype, v in sorted(by_type.items()):
-        width = int(((v["ok"] + v["err"]) / max_total) * 240)
-        bars.append(
-            f"<div><b>{ctype}</b> ok={v['ok']} err={v['err']}<div style='background:#ddd;width:240px;height:12px'>"
-            f"<div style='background:{'#d9534f' if v['err'] else '#5cb85c'};width:{width}px;height:12px'></div></div></div>"
-        )
-    bars_html = "".join(bars) or "<i>No data for chart</i>"
-
-    trend_points = []
-    trend_values = [int(r.get("accepted_events", 0)) for r in history[::-1]]
-    max_val = max(trend_values, default=1)
-    for i, val in enumerate(trend_values):
-        x = 10 + i * 14
-        y = 70 - int((val / max_val) * 60) if max_val else 70
-        trend_points.append(f"{x},{y}")
-    poly = " ".join(trend_points)
-    trend_svg = (
-        f"<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'>"
-        f"<polyline points='{poly}' fill='none' stroke='#337ab7' stroke-width='2' />"
-        f"</svg>"
-        if trend_points
-        else "<i>No trend data</i>"
-    )
-
-    return f"""
+def ui_diagnostics() -> str:
+    return """
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
       <h1>Worker diagnostics</h1>
-      <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
-      <div style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
-        <b>Summary:</b> runs={total}, ok={ok}, errors={errors}, accepted_events_sum={accepted_sum}
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history/summary'>JSON summary</a> | <a id='csv-export-link' href='/worker/history.csv'>CSV export</a></p>
+      <div style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0' id='summary-box'>
+        <b>Summary:</b> loading...
       </div>
       <h3>Errors by collector type</h3>
-      {bars_html}
+      <div id='bars-box'><i>Loading chart...</i></div>
       <h3>Accepted events trend</h3>
-      {trend_svg}
-      <form method='get' action='/ui/diagnostics' style='margin: 10px 0;'>
-        <label>Target ID <input name='target_id' value='{target_id}' /></label>
+      <div id='trend-box'><i>Loading trend...</i></div>
+      <form id='filters-form' style='margin: 10px 0;'>
+        <label>Target ID <input name='target_id' /></label>
         <label>Type
           <select name='collector_type'>
-            <option value='' {'selected' if not collector_type else ''}>all</option>
-            <option value='winrm' {'selected' if collector_type == 'winrm' else ''}>winrm</option>
-            <option value='ssh' {'selected' if collector_type == 'ssh' else ''}>ssh</option>
-            <option value='snmp' {'selected' if collector_type == 'snmp' else ''}>snmp</option>
+            <option value=''>all</option>
+            <option value='winrm'>winrm</option>
+            <option value='ssh'>ssh</option>
+            <option value='snmp'>snmp</option>
           </select>
         </label>
         <label>Error
           <select name='has_error'>
-            <option value='' {'selected' if has_error == '' else ''}>all</option>
-            <option value='1' {'selected' if has_error == '1' else ''}>only errors</option>
-            <option value='0' {'selected' if has_error == '0' else ''}>only ok</option>
+            <option value=''>all</option>
+            <option value='1'>only errors</option>
+            <option value='0'>only ok</option>
           </select>
         </label>
         <button type='submit'>Apply</button>
+        <button type='button' id='refresh-now'>Refresh now</button>
       </form>
-      <p><a href='/worker/history.csv?target_id={target_id}&collector_type={collector_type}&has_error={has_error}'>Download filtered CSV</a></p>
       <table border='1' cellpadding='8' cellspacing='0'>
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
-        <tbody>{rows_html}</tbody>
+        <tbody id='history-table-body'><tr><td colspan='7'>Loading worker history...</td></tr></tbody>
       </table>
+      <script>
+        const form = document.getElementById('filters-form');
+        const summaryBox = document.getElementById('summary-box');
+        const barsBox = document.getElementById('bars-box');
+        const trendBox = document.getElementById('trend-box');
+        const tableBody = document.getElementById('history-table-body');
+        const csvLink = document.getElementById('csv-export-link');
+
+        function readFilters() {
+          const params = new URLSearchParams();
+          const target = form.elements.target_id.value.trim();
+          const collectorType = form.elements.collector_type.value;
+          const hasError = form.elements.has_error.value;
+          if (target) params.set('target_id', target);
+          if (collectorType) params.set('collector_type', collectorType);
+          if (hasError !== '') params.set('has_error', hasError);
+          return params;
+        }
+
+        function restoreFiltersFromLocation() {
+          const q = new URLSearchParams(window.location.search);
+          form.elements.target_id.value = q.get('target_id') || '';
+          form.elements.collector_type.value = q.get('collector_type') || '';
+          form.elements.has_error.value = q.get('has_error') || '';
+        }
+
+        function updateUrl(params) {
+          const query = params.toString();
+          history.replaceState(null, '', query ? `/ui/diagnostics?${query}` : '/ui/diagnostics');
+        }
+
+        function renderSummary(payload) {
+          const summary = payload.summary || {};
+          summaryBox.innerHTML = `<b>Summary:</b> runs=${summary.runs || 0}, ok=${summary.ok || 0}, errors=${summary.errors || 0}, accepted_events_sum=${summary.accepted_events_sum || 0}`;
+        }
+
+        function renderBars(payload) {
+          const rows = payload.by_collector_type || [];
+          if (!rows.length) {
+            barsBox.innerHTML = '<i>No data for chart</i>';
+            return;
+          }
+          const maxRuns = Math.max(...rows.map(r => Number(r.runs || 0)), 1);
+          barsBox.innerHTML = rows.map((r) => {
+            const runs = Number(r.runs || 0);
+            const errors = Number(r.errors || 0);
+            const width = Math.round((runs / maxRuns) * 240);
+            const color = errors > 0 ? '#d9534f' : '#5cb85c';
+            return `<div><b>${r.collector_type}</b> ok=${r.ok} err=${r.errors}<div style='background:#ddd;width:240px;height:12px'><div style='background:${color};width:${width}px;height:12px'></div></div></div>`;
+          }).join('');
+        }
+
+        function renderTrend(payload) {
+          const trend = payload.trend || [];
+          if (!trend.length) {
+            trendBox.innerHTML = '<i>No trend data</i>';
+            return;
+          }
+          const values = trend.map((r) => Number(r.accepted_events || 0));
+          const maxVal = Math.max(...values, 1);
+          const points = values.map((val, i) => {
+            const x = 10 + i * 14;
+            const y = 70 - Math.round((val / maxVal) * 60);
+            return `${x},${y}`;
+          }).join(' ');
+          trendBox.innerHTML = `<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'><polyline points='${points}' fill='none' stroke='#337ab7' stroke-width='2' /></svg>`;
+        }
+
+        function renderHistory(rows) {
+          if (!rows.length) {
+            tableBody.innerHTML = "<tr><td colspan='7'>No worker history yet</td></tr>";
+            return;
+          }
+          tableBody.innerHTML = rows.map((row) => `<tr><td>${row.ts || ''}</td><td>${row.target_id || ''}</td><td>${row.collector_type || ''}</td><td>${row.accepted_events ?? 0}</td><td>${row.failure_streak ?? 0}</td><td>${row.last_cursor || '-'}</td><td>${row.last_error || '-'}</td></tr>`).join('');
+        }
+
+        async function refreshDiagnostics() {
+          const params = readFilters();
+          updateUrl(params);
+          csvLink.href = `/worker/history.csv?${params.toString()}`;
+          const [summaryResp, historyResp] = await Promise.all([
+            fetch(`/worker/history/summary?limit=100&${params.toString()}`),
+            fetch(`/worker/history?limit=100&${params.toString()}`),
+          ]);
+          if (!summaryResp.ok || !historyResp.ok) {
+            summaryBox.innerHTML = '<b>Summary:</b> failed to fetch diagnostics data';
+            return;
+          }
+          const summaryPayload = await summaryResp.json();
+          const historyPayload = await historyResp.json();
+          renderSummary(summaryPayload);
+          renderBars(summaryPayload);
+          renderTrend(summaryPayload);
+          renderHistory(historyPayload);
+        }
+
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          await refreshDiagnostics();
+        });
+        document.getElementById('refresh-now').addEventListener('click', refreshDiagnostics);
+        restoreFiltersFromLocation();
+        refreshDiagnostics();
+        setInterval(refreshDiagnostics, 10000);
+      </script>
     </body></html>
     """
 
@@ -566,16 +672,16 @@ def dashboard() -> str:
         <div style='display:flex;min-height:100vh;'>
           <aside style='width:86px;background:#273543;color:#fff;padding:14px 10px;'>
             <div style='font-weight:700;font-size:20px;text-align:center;margin:8px 0 24px;'>IM</div>
-            <div style='padding:10px 8px;border-left:3px solid #87d04a;background:#324657;border-radius:4px;margin-bottom:8px;'>Overview</div>
-            <div style='padding:10px 8px;opacity:.85;'>Assets</div>
-            <div style='padding:10px 8px;opacity:.85;'>Alerts</div>
-            <div style='padding:10px 8px;opacity:.85;'>Collectors</div>
+            <a href='/dashboard' style='display:block;padding:10px 8px;border-left:3px solid #87d04a;background:#324657;border-radius:4px;margin-bottom:8px;color:#fff;text-decoration:none;'>Overview</a>
+            <a href='/ui/assets' style='display:block;padding:10px 8px;opacity:.85;color:#fff;text-decoration:none;'>Assets</a>
+            <a href='/ui/events' style='display:block;padding:10px 8px;opacity:.85;color:#fff;text-decoration:none;'>Events</a>
+            <a href='/ui/collectors' style='display:block;padding:10px 8px;opacity:.85;color:#fff;text-decoration:none;'>Collectors</a>
           </aside>
 
           <main style='flex:1;'>
             <header style='background:#374957;color:#fff;padding:14px 22px;display:flex;justify-content:space-between;align-items:center;'>
               <div style='display:flex;gap:20px;font-weight:600;'>
-                <span>Dashboard</span><span style='opacity:.8;'>Reports</span><span style='opacity:.8;'>Security</span><span style='opacity:.8;'>Settings</span>
+                <a href='/dashboard' style='color:#fff;text-decoration:none;'>Dashboard</a><a href='/ui/diagnostics' style='color:#fff;opacity:.85;text-decoration:none;'>Diagnostics</a><a href='/worker/health' style='color:#fff;opacity:.85;text-decoration:none;'>Worker Health</a><a href='/ui/collectors' style='color:#fff;opacity:.85;text-decoration:none;'>Collectors</a>
               </div>
               <div style='font-size:14px;opacity:.9;'>InfraMind Monitor</div>
             </header>
@@ -603,7 +709,7 @@ def dashboard() -> str:
                     <div style='width:{crit_pct}%;background:#ef4f4f;'></div>
                   </div>
                   <p style='font-size:13px;color:#5b6c7d;'>Info {info_pct}% · Warning {warn_pct}% · Critical {crit_pct}%</p>
-                  <p style='margin:0;font-size:13px;'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
+                  <p style='margin:0;font-size:13px;' id='worker-health-widget'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · tracked {worker_health_data['tracked']} · failed {worker_health_data['failed']} · cycles {worker_health_data['cycle_count']} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
                 </div>
               </div>
 
@@ -640,6 +746,22 @@ def dashboard() -> str:
             </section>
           </main>
         </div>
+        <script>
+          async function refreshWorkerHealthWidget() {{
+            try {{
+              const resp = await fetch('/worker/health');
+              if (!resp.ok) return;
+              const payload = await resp.json();
+              const widget = document.getElementById('worker-health-widget');
+              if (!widget) return;
+              const state = payload.running ? 'running' : 'stopped';
+              widget.innerHTML = `<b>Worker health:</b> ${{state}} · tracked ${{payload.tracked}} · failed ${{payload.failed}} · cycles ${{payload.cycle_count}} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a>`;
+            }} catch (_e) {{
+              // ignore widget refresh errors to keep dashboard stable
+            }}
+          }}
+          setInterval(refreshWorkerHealthWidget, 5000);
+        </script>
       </body>
     </html>
     """
