@@ -9,10 +9,16 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from urllib.request import urlopen
+from urllib.error import URLError
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.models import (
     AccessAuditEntry,
@@ -44,6 +50,16 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
 SESSION_TTL_SEC = int(os.getenv("SESSION_TTL_SEC", "86400"))
 TOKEN_SECRET = os.getenv("TOKEN_SECRET", "change-token-secret")
 TOKEN_TTL_SEC = int(os.getenv("TOKEN_TTL_SEC", "3600"))
+AUTH_JWT_HS256_SECRET = os.getenv("AUTH_JWT_HS256_SECRET", "")
+AUTH_JWT_ISSUER = os.getenv("AUTH_JWT_ISSUER", "")
+AUTH_JWT_AUDIENCE = os.getenv("AUTH_JWT_AUDIENCE", "")
+AUTH_JWT_ROLE_CLAIM = os.getenv("AUTH_JWT_ROLE_CLAIM", "role")
+AUTH_JWKS_URL = os.getenv("AUTH_JWKS_URL", "")
+AUTH_OIDC_DISCOVERY_URL = os.getenv("AUTH_OIDC_DISCOVERY_URL", "")
+AUTH_JWKS_CACHE_TTL_SEC = int(os.getenv("AUTH_JWKS_CACHE_TTL_SEC", "300"))
+AUTH_JWT_LEEWAY_SEC = int(os.getenv("AUTH_JWT_LEEWAY_SEC", "30"))
+AUTH_ROLE_SCOPES_MAP = os.getenv("AUTH_ROLE_SCOPES_MAP", "monitor.admin:admin,monitor.write:operator,monitor.read:viewer")
+AUTH_ROLE_GROUPS_MAP = os.getenv("AUTH_ROLE_GROUPS_MAP", "admins:admin,operators:operator,viewers:viewer")
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -106,6 +122,241 @@ def _token_sign(payload: str) -> str:
     return hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
 
 
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode())
+
+
+
+
+_JWKS_CACHE: dict[str, object] = {"ts": 0.0, "keys": {}}
+_OIDC_DISCOVERY_CACHE: dict[str, object] = {"ts": 0.0, "jwks_uri": ""}
+
+
+def _b64url_decode_to_int(value: str) -> int:
+    return int.from_bytes(_b64url_decode(value), byteorder="big")
+
+
+def _parse_role_mapping(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        key, role = item.split(":", 1)
+        norm = role.strip()
+        if norm in {"viewer", "operator", "admin"}:
+            out[key.strip()] = norm
+    return out
+
+
+ROLE_PRIORITY = {"viewer": 0, "operator": 1, "admin": 2}
+ROLE_SCOPES_MAP = _parse_role_mapping(AUTH_ROLE_SCOPES_MAP)
+ROLE_GROUPS_MAP = _parse_role_mapping(AUTH_ROLE_GROUPS_MAP)
+JWT_REJECT_TELEMETRY: Counter[str] = Counter()
+
+
+def _record_jwt_reject(reason: str) -> None:
+    JWT_REJECT_TELEMETRY[reason] += 1
+
+
+def _role_from_claim_mapping(payload: dict[str, object]) -> str | None:
+    role_val = payload.get(AUTH_JWT_ROLE_CLAIM)
+    if isinstance(role_val, list):
+        for v in role_val:
+            n = _normalize_role(str(v))
+            if n != "viewer" or str(v) == "viewer":
+                return n
+    elif role_val is not None:
+        role = _normalize_role(str(role_val))
+        if role != "viewer" or str(role_val) == "viewer":
+            return role
+
+    scopes = payload.get("scope")
+    scope_values: list[str] = []
+    if isinstance(scopes, str):
+        scope_values = [x.strip() for x in scopes.split(" ") if x.strip()]
+    elif isinstance(scopes, list):
+        scope_values = [str(x) for x in scopes]
+    mapped = [ROLE_SCOPES_MAP[s] for s in scope_values if s in ROLE_SCOPES_MAP]
+
+    groups = payload.get("groups")
+    group_values: list[str] = []
+    if isinstance(groups, list):
+        group_values = [str(x) for x in groups]
+    elif isinstance(groups, str):
+        group_values = [groups]
+    mapped.extend(ROLE_GROUPS_MAP[g] for g in group_values if g in ROLE_GROUPS_MAP)
+
+    if not mapped:
+        return None
+    return max(mapped, key=lambda r: ROLE_PRIORITY.get(r, 0))
+
+
+def _resolve_jwks_url() -> str:
+    if AUTH_JWKS_URL:
+        return AUTH_JWKS_URL
+    if not AUTH_OIDC_DISCOVERY_URL:
+        return ""
+
+    now = time.time()
+    ts = float(_OIDC_DISCOVERY_CACHE.get("ts", 0.0))
+    cached = str(_OIDC_DISCOVERY_CACHE.get("jwks_uri", ""))
+    if cached and now - ts < max(1, AUTH_JWKS_CACHE_TTL_SEC):
+        return cached
+
+    try:
+        with urlopen(AUTH_OIDC_DISCOVERY_URL, timeout=3) as resp:  # nosec B310
+            doc = json.loads(resp.read().decode())
+    except (URLError, TimeoutError, ValueError):
+        return cached
+
+    jwks_uri = str(doc.get("jwks_uri", "")).strip()
+    if jwks_uri:
+        _OIDC_DISCOVERY_CACHE["ts"] = now
+        _OIDC_DISCOVERY_CACHE["jwks_uri"] = jwks_uri
+        return jwks_uri
+    return cached
+
+
+def _validate_jwt_payload_claims(payload: dict[str, object]) -> bool:
+    now = int(time.time())
+    leeway = max(0, AUTH_JWT_LEEWAY_SEC)
+
+    exp = int(payload.get("exp", 0))
+    if exp <= 0 or exp < now - leeway:
+        return False
+
+    nbf = payload.get("nbf")
+    if nbf is not None and int(nbf) > now + leeway:
+        return False
+
+    iat = payload.get("iat")
+    if iat is not None and int(iat) > now + leeway:
+        return False
+
+    if AUTH_JWT_ISSUER and payload.get("iss") != AUTH_JWT_ISSUER:
+        return False
+
+    aud = payload.get("aud")
+    if AUTH_JWT_AUDIENCE:
+        if isinstance(aud, list):
+            if AUTH_JWT_AUDIENCE not in aud:
+                return False
+        elif aud != AUTH_JWT_AUDIENCE:
+            return False
+
+    return True
+
+def _fetch_jwks_keys(force_refresh: bool = False) -> dict[str, rsa.RSAPublicKey]:
+    now = time.time()
+    ts = float(_JWKS_CACHE.get("ts", 0.0))
+    cached = _JWKS_CACHE.get("keys")
+    if cached and now - ts < max(1, AUTH_JWKS_CACHE_TTL_SEC):
+        return cached  # type: ignore[return-value]
+
+    jwks_url = _resolve_jwks_url()
+    if not jwks_url:
+        return {}
+
+    try:
+        with urlopen(jwks_url, timeout=3) as resp:  # nosec B310
+            payload = json.loads(resp.read().decode())
+    except (URLError, TimeoutError, ValueError):
+        return cached if isinstance(cached, dict) else {}
+
+    out: dict[str, rsa.RSAPublicKey] = {}
+    for key in payload.get("keys", []):
+        if key.get("kty") != "RSA":
+            continue
+        kid = str(key.get("kid", "")).strip()
+        n = key.get("n")
+        e = key.get("e")
+        if not kid or not n or not e:
+            continue
+        try:
+            pub = rsa.RSAPublicNumbers(_b64url_decode_to_int(e), _b64url_decode_to_int(n)).public_key()
+            out[kid] = pub
+        except Exception:
+            continue
+
+    if out:
+        _JWKS_CACHE["ts"] = now
+        _JWKS_CACHE["keys"] = out
+    return out or (cached if isinstance(cached, dict) else {})
+
+
+def _parse_jwt_rs256_role(token: str | None) -> str | None:
+    if not token or token.count(".") != 2 or not _resolve_jwks_url():
+        return None
+    try:
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        header = json.loads(_b64url_decode(header_b64).decode())
+        if header.get("alg") != "RS256":
+            _record_jwt_reject("rs256_bad_alg")
+            return None
+        kid = str(header.get("kid", "")).strip()
+        if not kid:
+            _record_jwt_reject("rs256_missing_kid")
+            return None
+
+        keys = _fetch_jwks_keys()
+        pub = keys.get(kid)
+        if pub is None:
+            keys = _fetch_jwks_keys(force_refresh=True)
+            pub = keys.get(kid)
+        if pub is None:
+            _record_jwt_reject("rs256_unknown_kid")
+            return None
+
+        signing_input = f"{header_b64}.{payload_b64}".encode()
+        signature = _b64url_decode(sig_b64)
+        pub.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+
+        payload = json.loads(_b64url_decode(payload_b64).decode())
+        if not _validate_jwt_payload_claims(payload):
+            _record_jwt_reject("claim_validation_failed")
+            return None
+
+        role = _role_from_claim_mapping(payload)
+        if role is None:
+            _record_jwt_reject("role_mapping_failed")
+            return None
+        return role
+    except (ValueError, InvalidSignature, TypeError):
+        _record_jwt_reject("rs256_parse_or_verify_failed")
+        return None
+
+def _parse_jwt_hs256_role(token: str | None) -> str | None:
+    if not token or token.count(".") != 2 or not AUTH_JWT_HS256_SECRET:
+        return None
+    try:
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        signing_input = f"{header_b64}.{payload_b64}"
+        expected_sig = hmac.new(AUTH_JWT_HS256_SECRET.encode(), signing_input.encode(), hashlib.sha256).digest()
+        token_sig = _b64url_decode(sig_b64)
+        if not hmac.compare_digest(token_sig, expected_sig):
+            return None
+
+        header = json.loads(_b64url_decode(header_b64).decode())
+        if header.get("alg") != "HS256":
+            _record_jwt_reject("hs256_bad_alg")
+            return None
+
+        payload = json.loads(_b64url_decode(payload_b64).decode())
+        if not _validate_jwt_payload_claims(payload):
+            _record_jwt_reject("claim_validation_failed")
+            return None
+
+        role = _role_from_claim_mapping(payload)
+        if role is None:
+            _record_jwt_reject("role_mapping_failed")
+            return None
+        return role
+    except Exception:
+        _record_jwt_reject("hs256_parse_or_verify_failed")
+        return None
+
 def _create_bearer_token(role: str) -> str:
     exp = int(time.time()) + TOKEN_TTL_SEC
     payload = f"{role}|{exp}"
@@ -134,6 +385,14 @@ AUTH_TOKEN_ROLE_MAP = _load_auth_token_roles()
 AUTH_USER_MAP = _load_auth_users()
 
 
+
+
+@dataclass
+class AuthContext:
+    role: str
+    source: str
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     if ENABLE_AGENTLESS_WORKER:
@@ -146,6 +405,47 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+
+POLICY_RULES: list[tuple[str, str, str, str, str]] = [
+    ("GET", "/auth/audit", "admin", "read auth audit", "viewer"),
+    ("GET", "/auth/audit.csv", "admin", "export auth audit", "viewer"),
+    ("GET", "/auth/audit/summary", "admin", "read auth audit summary", "viewer"),
+    ("GET", "/auth/audit/alerts", "admin", "read auth audit alerts", "viewer"),
+    ("GET", "/auth/jwt/reject-telemetry", "admin", "read jwt reject telemetry", "viewer"),
+    ("GET", "/worker/history", "operator", "read worker history", "admin"),
+    ("GET", "/worker/history.csv", "operator", "export worker history", "admin"),
+    ("GET", "/worker/targets", "operator", "read worker targets", "admin"),
+    ("POST", "/worker/run-once", "operator", "run worker", "admin"),
+    ("GET", "/collectors", "operator", "read collectors", "admin"),
+    ("POST", "/collectors", "operator", "write collectors", "admin"),
+    ("DELETE", "/collectors", "operator", "delete collectors", "admin"),
+    ("POST", "/assets", "operator", "write assets", "admin"),
+    ("POST", "/events", "operator", "write events", "admin"),
+    ("POST", "/ingest/events", "operator", "ingest events", "admin"),
+]
+
+
+def _policy_rule_for_request(method: str, path: str) -> tuple[str, str, str] | None:
+    for m, prefix, min_role, action, default_role in POLICY_RULES:
+        if method == m and path.startswith(prefix):
+            return (min_role, action, default_role)
+    return None
+
+
+@app.middleware("http")
+async def auth_context_middleware(request: Request, call_next):
+    role_hint = request.query_params.get("role")
+    request.state.auth_context = _resolve_auth_context_from_request(request, role_hint, default_role="viewer")
+    rule = _policy_rule_for_request(request.method, request.url.path)
+    if rule is not None:
+        min_role, action, default_role = rule
+        try:
+            _require_role(request, role_hint, minimum_role=min_role, action=action, default_role=default_role)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return await call_next(request)
 
 
 def _asset_exists(asset_id: str) -> bool:
@@ -550,36 +850,50 @@ def _can_control_worker(role: str) -> bool:
     return role in {"operator", "admin"}
 
 
+def _resolve_auth_context_from_request(
+    request: Request,
+    role_hint: str | None,
+    default_role: str,
+) -> AuthContext:
+    authz = request.headers.get("Authorization", "").strip()
+    if authz.lower().startswith("bearer "):
+        token = authz.split(" ", 1)[1].strip()
+        jwt_rs_role = _parse_jwt_rs256_role(token)
+        if jwt_rs_role:
+            return AuthContext(role=jwt_rs_role, source="jwt_rs256")
+        jwt_role = _parse_jwt_hs256_role(token)
+        if jwt_role:
+            return AuthContext(role=jwt_role, source="jwt_hs256")
+        parsed_role = _parse_bearer_token(token)
+        if parsed_role:
+            return AuthContext(role=parsed_role, source="bearer_signed")
+        if token in AUTH_TOKEN_ROLE_MAP:
+            return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="bearer_static")
+
+    token = request.headers.get("X-Auth-Token", "").strip()
+    if token and token in AUTH_TOKEN_ROLE_MAP:
+        return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="header_token")
+
+    header_role = request.headers.get("X-Role", "").strip()
+    if header_role:
+        return AuthContext(role=_normalize_role(header_role), source="header_role")
+
+    session_role = _parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))
+    if session_role:
+        return AuthContext(role=session_role, source="session")
+
+    if ALLOW_QUERY_ROLE and role_hint:
+        return AuthContext(role=_normalize_role(role_hint), source="query_role")
+
+    return AuthContext(role=_normalize_role(default_role), source="default")
+
+
 def _resolve_role_from_request(
     request: Request,
     role_hint: str | None,
     default_role: str,
 ) -> str:
-    authz = request.headers.get("Authorization", "").strip()
-    if authz.lower().startswith("bearer "):
-        token = authz.split(" ", 1)[1].strip()
-        parsed_role = _parse_bearer_token(token)
-        if parsed_role:
-            return parsed_role
-        if token in AUTH_TOKEN_ROLE_MAP:
-            return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
-
-    token = request.headers.get("X-Auth-Token", "").strip()
-    if token and token in AUTH_TOKEN_ROLE_MAP:
-        return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
-
-    header_role = request.headers.get("X-Role", "").strip()
-    if header_role:
-        return _normalize_role(header_role)
-
-    session_role = _parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))
-    if session_role:
-        return session_role
-
-    if ALLOW_QUERY_ROLE and role_hint:
-        return _normalize_role(role_hint)
-
-    return _normalize_role(default_role)
+    return _resolve_auth_context_from_request(request, role_hint, default_role).role
 
 
 ROLE_ORDER = {"viewer": 0, "operator": 1, "admin": 2}
@@ -636,15 +950,30 @@ def _require_admin_dependency(request: Request, role: str | None = None) -> str:
     return _require_role(request, role, minimum_role="admin", action="admin action", default_role="viewer")
 
 
+def _require_role_dependency(minimum_role: str, action: str, default_role: str = "viewer"):
+    def _dependency(request: Request, role: str | None = None) -> str:
+        return _require_role(request, role, minimum_role=minimum_role, action=action, default_role=default_role)
+
+    return _dependency
+
+
+require_worker_history_read = _require_role_dependency("operator", "read worker history", default_role="admin")
+require_worker_history_export = _require_role_dependency("operator", "export worker history", default_role="admin")
+
+
 @app.get("/auth/whoami")
 def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bool]:
-    resolved = _resolve_role_from_request(request, role, default_role="viewer")
+    context = _resolve_auth_context_from_request(request, role, default_role="viewer") if role else getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
     return {
-        "role": resolved,
+        "role": context.role,
+        "source": context.source,
         "has_token": bool(request.headers.get("X-Auth-Token", "").strip() or request.headers.get("Authorization", "")),
         "has_session": bool(_parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))),
         "used_query_role_hint": bool(role),
         "allow_query_role": ALLOW_QUERY_ROLE,
+        "jwt_hs256_enabled": bool(AUTH_JWT_HS256_SECRET),
+        "jwt_jwks_enabled": bool(_resolve_jwks_url()),
+        "oidc_discovery_enabled": bool(AUTH_OIDC_DISCOVERY_URL),
     }
 
 
@@ -684,6 +1013,50 @@ def auth_logout() -> JSONResponse:
 @app.get("/auth/audit")
 def auth_audit(request: Request, limit: int = 100, _role: str = Depends(_require_admin_dependency)) -> list[dict[str, str | int]]:
     return [a.model_dump() for a in service.list_access_audit(limit=max(1, min(limit, 500)))]
+
+
+@app.get("/auth/audit.csv", response_class=PlainTextResponse)
+def auth_audit_csv(request: Request, limit: int = 1000, _role: str = Depends(_require_admin_dependency)) -> str:
+    rows = service.list_access_audit(limit=max(1, min(limit, 5000)))
+    header = "ts,path,role,action,result"
+
+    def esc(v: str) -> str:
+        return '"' + v.replace('"', '""') + '"'
+
+    lines = [header]
+    for a in rows:
+        lines.append(",".join([str(a.ts), esc(a.path), esc(a.role), esc(a.action), esc(a.result)]))
+    return "\n".join(lines)
+
+
+@app.get("/auth/audit/summary")
+def auth_audit_summary(request: Request, limit: int = 1000, _role: str = Depends(_require_admin_dependency)) -> dict:
+    rows = service.list_access_audit(limit=max(1, min(limit, 5000)))
+    by_result = Counter(a.result for a in rows)
+    by_role = Counter(a.role for a in rows)
+    by_action = Counter(a.action for a in rows)
+    return {
+        "rows": len(rows),
+        "allow": by_result.get("allow", 0),
+        "deny": by_result.get("deny", 0),
+        "by_role": dict(by_role),
+        "top_actions": [{"action": k, "count": v} for k, v in by_action.most_common(10)],
+    }
+
+
+@app.get("/auth/audit/alerts")
+def auth_audit_alerts(request: Request, lookback: int = 200, deny_threshold: int = 20, _role: str = Depends(_require_admin_dependency)) -> dict:
+    rows = service.list_access_audit(limit=max(1, min(lookback, 5000)))
+    denies = [a for a in rows if a.result == "deny"]
+    alerts = []
+    if len(denies) >= max(1, deny_threshold):
+        alerts.append({"kind": "high_deny_rate", "deny": len(denies), "lookback": lookback, "threshold": deny_threshold})
+    return {"alerts": alerts, "deny": len(denies), "lookback": lookback}
+
+
+@app.get("/auth/jwt/reject-telemetry")
+def auth_jwt_reject_telemetry(request: Request, _role: str = Depends(_require_admin_dependency)) -> dict:
+    return {"counters": dict(JWT_REJECT_TELEMETRY)}
 
 
 def _build_diagnostics_summary(history: list[dict]) -> dict:
@@ -738,9 +1111,8 @@ def worker_history(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: bool | None = None,
-    role: str | None = None,
+    _role: str = Depends(require_worker_history_read),
 ) -> list[dict]:
-    _require_role(request, role, minimum_role="operator", action="read worker history", default_role="admin")
     return worker.history(
         limit=limit,
         target_id=target_id,
@@ -756,9 +1128,8 @@ def worker_history_csv(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
-    role: str | None = None,
+    _role: str = Depends(require_worker_history_export),
 ) -> str:
-    _require_role(request, role, minimum_role="operator", action="export worker history", default_role="admin")
     rows = worker.history(
         limit=limit,
         target_id=target_id,

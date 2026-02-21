@@ -797,8 +797,54 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 - policy-check extraction: ключевые admin/operator endpoint'ы переведены на dependency-based guard (`Depends(...)`) вместо ручного вызова в каждом endpoint;
 - расширены env-настройки token-провайдера (`TOKEN_SECRET`, `TOKEN_TTL_SEC`).
 
+## Следующий шаг (реализовано): Policy middleware foundation + auth-context source
+
+Сделали следующий укрупнённый шаг поверх auth hardening:
+
+- добавлен middleware, который нормализует auth-context на каждый запрос и фиксирует источник роли (`bearer_signed`, `bearer_static`, `header_token`, `header_role`, `session`, `query_role`, `default`);
+- добавлен структурный `AuthContext`, а `GET /auth/whoami` теперь показывает не только роль, но и `source`;
+- добавлен фабричный dependency helper для role-check'ов и переведены `worker/history` + `worker/history.csv` на dependency-based policy guards с явными action-метками для audit;
+- добавлены тесты на whoami/source и сценарий signed bearer source.
+
+## Следующий шаг (реализовано): JWT provider foundation (HS256 claims validation)
+
+Сделали следующий укрупнённый модульный шаг:
+
+- добавлена валидация стандартного JWT (HS256) из `Authorization: Bearer ...` с проверкой `exp`, `iss`, `aud` и role-claim;
+- добавлены env-параметры `AUTH_JWT_HS256_SECRET`, `AUTH_JWT_ISSUER`, `AUTH_JWT_AUDIENCE`, `AUTH_JWT_ROLE_CLAIM`;
+- `whoami` теперь отражает источник `jwt_hs256`, что упрощает миграцию к внешнему IdP;
+- сохранена обратная совместимость: bootstrap bearer/static/session/header/query fallback продолжают работать.
+
+## Следующий шаг (реализовано): OIDC/JWKS foundation (RS256 + kid)
+
+Сделали следующий укрупнённый шаг по auth-модулю:
+
+- добавлена проверка JWT `RS256` через JWKS (`kid` -> RSA public key), включая подпись + `exp`/`iss`/`aud`/role-claim валидацию;
+- добавлены env-параметры `AUTH_JWKS_URL` и `AUTH_JWKS_CACHE_TTL_SEC` для подключения к внешнему issuer и кэша ключей;
+- источник роли расширен новым типом `jwt_rs256`, который видно в `/auth/whoami`;
+- сохранена обратная совместимость: если RS256/JWKS невалиден, продолжает работать существующий fallback-пайплайн auth-context.
+
+## Следующий шаг (реализовано): OIDC discovery + stricter claim policy
+
+Сделали ещё один крупный модуль:
+
+- добавлен OIDC discovery-режим через `AUTH_OIDC_DISCOVERY_URL` (`.well-known/openid-configuration`) с резолвом `jwks_uri`;
+- добавлено кэширование discovery/JWKS с TTL и fallback на предыдущие значения при временных сетевых ошибках;
+- усилена claim-policy для JWT: учитываются `nbf`/`iat` и configurable leeway (`AUTH_JWT_LEEWAY_SEC`) вместе с существующими `exp`/`iss`/`aud`;
+- `whoami` расширен флагом `oidc_discovery_enabled` для быстрой диагностики режима auth-provider.
+
+## Следующий шаг (реализовано): OIDC production hardening + policy unification + ops/compliance
+
+Собрали сразу следующий крупный bundle: 
+
+- key-rotation edge-case закрыт: при unknown `kid` выполняется forced JWKS refresh перед окончательным reject;
+- добавлено role mapping по claims `scope` и `groups` через env-конфигурацию (`AUTH_ROLE_SCOPES_MAP`, `AUTH_ROLE_GROUPS_MAP`);
+- добавлена reject telemetry для JWT (счетчики причин reject) и endpoint `/auth/jwt/reject-telemetry` (admin-only);
+- сделана policy middleware unification: единый middleware rule-set для чувствительных worker/collector/ingest/auth endpoints;
+- расширен Ops & Compliance: `/auth/audit.csv`, `/auth/audit/summary`, `/auth/audit/alerts` для экспорта, отчётности и базовых policy-alerts.
+
 ### Что дальше по плану (укрупнённо)
 
-1. **OIDC/JWT Provider**: заменить self-signed token на внешний provider (Keycloak/Auth0/Azure AD).
-2. **Policy Middleware Unification**: единый middleware/dependency для всего API, включая read-side scoped filtering.
-3. **Ops & Compliance**: persisted audit export/reporting + policy violation alerts.
+1. **OIDC enterprise hardening**: claim-to-role policy packs (azp/scp/groups), per-issuer profiles и reject telemetry с детализацией по issuer/client.
+2. **Read-side RBAC scoping**: role/tenant scoped filtering для dashboard/diagnostics/assets APIs.
+3. **Compliance automation**: scheduled reports, alert routing (webhook/email), retention/purge policies.

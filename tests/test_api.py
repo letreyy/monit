@@ -1,7 +1,14 @@
 from pathlib import Path
 import sys
+import json
+import time
+import hmac
+import hashlib
+import base64
 
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -16,10 +23,55 @@ def setup_function() -> None:
         db_path.unlink()
     main_module.service = MonitoringService(SQLiteStorage(str(db_path)))
     main_module.worker = AgentlessWorker(main_module.service)
+    main_module.AUTH_JWT_HS256_SECRET = ""
+    main_module.AUTH_JWT_ISSUER = ""
+    main_module.AUTH_JWT_AUDIENCE = ""
+    main_module.AUTH_JWT_ROLE_CLAIM = "role"
+    main_module.AUTH_JWKS_URL = ""
+    main_module.AUTH_OIDC_DISCOVERY_URL = ""
+    main_module.AUTH_JWKS_CACHE_TTL_SEC = 300
+    main_module.AUTH_JWT_LEEWAY_SEC = 30
+    main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
+    main_module._OIDC_DISCOVERY_CACHE = {"ts": 0.0, "jwks_uri": ""}
 
 
 client = TestClient(main_module.app)
 
+
+def _jwt_hs256(payload: dict, secret: str) -> str:
+    def enc(v: bytes) -> str:
+        return base64.urlsafe_b64encode(v).decode().rstrip("=")
+
+    header = {"alg": "HS256", "typ": "JWT"}
+    header_b64 = enc(json.dumps(header, separators=(",", ":")).encode())
+    payload_b64 = enc(json.dumps(payload, separators=(",", ":")).encode())
+    signing_input = f"{header_b64}.{payload_b64}"
+    sig = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
+    return f"{signing_input}.{enc(sig)}"
+
+
+
+
+def _jwt_rs256(payload: dict, private_key: rsa.RSAPrivateKey, kid: str = "k1") -> str:
+    def enc(v: bytes) -> str:
+        return base64.urlsafe_b64encode(v).decode().rstrip("=")
+
+    header = {"alg": "RS256", "typ": "JWT", "kid": kid}
+    header_b64 = enc(json.dumps(header, separators=(",", ":")).encode())
+    payload_b64 = enc(json.dumps(payload, separators=(",", ":")).encode())
+    signing_input = f"{header_b64}.{payload_b64}".encode()
+    sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return f"{header_b64}.{payload_b64}.{enc(sig)}"
+
+
+def _rsa_public_jwk(private_key: rsa.RSAPrivateKey, kid: str = "k1") -> dict:
+    pub = private_key.public_key().public_numbers()
+
+    def enc_int(v: int) -> str:
+        raw = v.to_bytes((v.bit_length() + 7) // 8, "big")
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    return {"kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig", "n": enc_int(pub.n), "e": enc_int(pub.e)}
 
 def test_ui_collector_target_flow() -> None:
     client.post(
@@ -819,6 +871,257 @@ def test_auth_whoami_with_role_header() -> None:
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["role"] == "operator"
+
+
+
+
+def test_auth_whoami_reports_source_for_bearer_token() -> None:
+    tok = client.post("/auth/token", data={"username": "ops", "password": "ops123"})
+    assert tok.status_code == 200
+    token = tok.json()["access_token"]
+
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["role"] == "operator"
+    assert payload["source"] == "bearer_signed"
+
+
+def test_auth_whoami_reports_default_source_without_auth() -> None:
+    resp = client.get("/auth/whoami")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["source"] in {"default", "session"}
+    assert payload["role"] in {"viewer", "operator", "admin"}
+
+
+def test_auth_whoami_accepts_valid_hs256_jwt() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-1"
+    main_module.AUTH_JWT_AUDIENCE = "aud-1"
+    main_module.AUTH_JWT_ROLE_CLAIM = "role"
+
+    payload = {
+        "iss": "issuer-1",
+        "aud": "aud-1",
+        "exp": int(time.time()) + 300,
+        "role": "operator",
+    }
+    token = _jwt_hs256(payload, secret)
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role"] == "operator"
+    assert data["source"] == "jwt_hs256"
+
+
+def test_auth_whoami_rejects_invalid_hs256_jwt_audience() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-1"
+    main_module.AUTH_JWT_AUDIENCE = "aud-expected"
+
+    payload = {
+        "iss": "issuer-1",
+        "aud": "aud-other",
+        "exp": int(time.time()) + 300,
+        "role": "admin",
+    }
+    token = _jwt_hs256(payload, secret)
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] != "jwt_hs256"
+
+
+
+def test_auth_whoami_accepts_valid_rs256_jwt_via_jwks(monkeypatch: pytest.MonkeyPatch) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = _rsa_public_jwk(private_key, kid="kid-1")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"keys": [jwk]}).encode()
+
+    monkeypatch.setattr(main_module, "urlopen", lambda *args, **kwargs: _Resp())
+
+    main_module.AUTH_JWKS_URL = "https://issuer.example/jwks.json"
+    main_module.AUTH_JWT_ISSUER = "issuer-rs"
+    main_module.AUTH_JWT_AUDIENCE = "aud-rs"
+    main_module.AUTH_JWT_ROLE_CLAIM = "role"
+    main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
+
+    payload = {"iss": "issuer-rs", "aud": "aud-rs", "exp": int(time.time()) + 300, "role": "admin"}
+    token = _jwt_rs256(payload, private_key, kid="kid-1")
+
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role"] == "admin"
+    assert data["source"] == "jwt_rs256"
+
+
+def test_auth_whoami_rejects_rs256_jwt_with_unknown_kid(monkeypatch: pytest.MonkeyPatch) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    other_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = _rsa_public_jwk(other_key, kid="kid-other")
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps({"keys": [jwk]}).encode()
+
+    monkeypatch.setattr(main_module, "urlopen", lambda *args, **kwargs: _Resp())
+
+    main_module.AUTH_JWKS_URL = "https://issuer.example/jwks.json"
+    main_module.AUTH_JWT_ISSUER = "issuer-rs"
+    main_module.AUTH_JWT_AUDIENCE = "aud-rs"
+    main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
+
+    payload = {"iss": "issuer-rs", "aud": "aud-rs", "exp": int(time.time()) + 300, "role": "operator"}
+    token = _jwt_rs256(payload, private_key, kid="kid-1")
+
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] != "jwt_rs256"
+
+
+
+def test_auth_whoami_accepts_rs256_via_oidc_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = _rsa_public_jwk(private_key, kid="kid-disc")
+
+    class _Resp:
+        def __init__(self, payload: dict):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    def _urlopen(url: str, timeout: int = 0):
+        if "openid-configuration" in url:
+            return _Resp({"jwks_uri": "https://issuer.example/jwks"})
+        if url.endswith("/jwks"):
+            return _Resp({"keys": [jwk]})
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(main_module, "urlopen", _urlopen)
+
+    main_module.AUTH_JWKS_URL = ""
+    main_module.AUTH_OIDC_DISCOVERY_URL = "https://issuer.example/.well-known/openid-configuration"
+    main_module.AUTH_JWT_ISSUER = "issuer-disc"
+    main_module.AUTH_JWT_AUDIENCE = "aud-disc"
+    main_module.AUTH_JWT_ROLE_CLAIM = "role"
+    main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
+    main_module._OIDC_DISCOVERY_CACHE = {"ts": 0.0, "jwks_uri": ""}
+
+    payload = {"iss": "issuer-disc", "aud": "aud-disc", "exp": int(time.time()) + 300, "role": "operator"}
+    token = _jwt_rs256(payload, private_key, kid="kid-disc")
+
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role"] == "operator"
+    assert data["source"] == "jwt_rs256"
+    assert data["oidc_discovery_enabled"] is True
+
+
+def test_auth_whoami_rejects_jwt_with_future_nbf() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-1"
+    main_module.AUTH_JWT_AUDIENCE = "aud-1"
+    main_module.AUTH_JWT_LEEWAY_SEC = 0
+
+    payload = {
+        "iss": "issuer-1",
+        "aud": "aud-1",
+        "exp": int(time.time()) + 300,
+        "nbf": int(time.time()) + 120,
+        "role": "admin",
+    }
+    token = _jwt_hs256(payload, secret)
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["source"] != "jwt_hs256"
+
+
+
+def test_auth_whoami_maps_role_from_groups_claim() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-1"
+    main_module.AUTH_JWT_AUDIENCE = "aud-1"
+    main_module.ROLE_GROUPS_MAP = {"operators": "operator", "admins": "admin"}
+
+    payload = {
+        "iss": "issuer-1",
+        "aud": "aud-1",
+        "exp": int(time.time()) + 300,
+        "groups": ["operators"],
+    }
+    token = _jwt_hs256(payload, secret)
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role"] == "operator"
+    assert data["source"] == "jwt_hs256"
+
+
+def test_auth_jwt_reject_telemetry_and_audit_exports() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-1"
+    main_module.AUTH_JWT_AUDIENCE = "aud-1"
+
+    bad = _jwt_hs256({"iss": "issuer-1", "aud": "aud-1", "exp": int(time.time()) - 5, "role": "admin"}, secret)
+    client.get("/auth/whoami", headers={"Authorization": f"Bearer {bad}"})
+
+    telem = client.get("/auth/jwt/reject-telemetry", headers={"X-Role": "admin"})
+    assert telem.status_code == 200
+    assert "counters" in telem.json()
+
+    summary = client.get("/auth/audit/summary", headers={"X-Role": "admin"})
+    assert summary.status_code == 200
+    assert "rows" in summary.json()
+
+    csv_resp = client.get("/auth/audit.csv", headers={"X-Role": "admin"})
+    assert csv_resp.status_code == 200
+    assert "ts,path,role,action,result" in csv_resp.text
+
+
+def test_policy_middleware_forbids_viewer_on_post_events() -> None:
+    client.post(
+        "/assets",
+        headers={"X-Role": "operator"},
+        json={"id": "srv-policy", "name": "srv-policy", "asset_type": "server", "location": "R16"},
+    )
+    denied = client.post(
+        "/events",
+        headers={"X-Role": "viewer"},
+        json={"asset_id": "srv-policy", "source": "manual", "message": "x", "severity": "info"},
+    )
+    assert denied.status_code == 403
 
 
 def test_worker_sensitive_endpoints_forbid_viewer_header_role() -> None:
