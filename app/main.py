@@ -364,6 +364,52 @@ def _worker_health_snapshot() -> dict[str, int | str | bool]:
     }
 
 
+def _parse_has_error(has_error: str) -> bool | None:
+    if has_error == "1":
+        return True
+    if has_error == "0":
+        return False
+    return None
+
+
+def _worker_history_summary(history: list[dict]) -> dict[str, int]:
+    total = len(history)
+    errors = sum(1 for r in history if r.get("last_error"))
+    return {
+        "runs": total,
+        "ok": total - errors,
+        "errors": errors,
+        "accepted_events_sum": sum(int(r.get("accepted_events", 0)) for r in history),
+    }
+
+
+def _worker_history_by_type(history: list[dict]) -> list[dict[str, int | str]]:
+    by_type: dict[str, dict[str, int]] = {}
+    for r in history:
+        ctype = str(r.get("collector_type", "unknown"))
+        bucket = by_type.setdefault(ctype, {"ok": 0, "errors": 0})
+        if r.get("last_error"):
+            bucket["errors"] += 1
+        else:
+            bucket["ok"] += 1
+    return [
+        {
+            "collector_type": ctype,
+            "ok": values["ok"],
+            "errors": values["errors"],
+            "runs": values["ok"] + values["errors"],
+        }
+        for ctype, values in sorted(by_type.items())
+    ]
+
+
+def _worker_history_trend(history: list[dict]) -> list[dict[str, int | str]]:
+    return [
+        {"ts": str(r.get("ts", "")), "accepted_events": int(r.get("accepted_events", 0))}
+        for r in history[::-1]
+    ]
+
+
 @app.get("/worker/health")
 def worker_health() -> dict[str, int | str | bool]:
     snap = _worker_health_snapshot()
@@ -384,6 +430,26 @@ def worker_history(
         collector_type=collector_type,
         has_error=has_error,
     )
+
+
+@app.get("/worker/history/summary")
+def worker_history_summary(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: bool | None = None,
+) -> dict:
+    history = worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error,
+    )
+    return {
+        "summary": _worker_history_summary(history),
+        "by_collector_type": _worker_history_by_type(history),
+        "trend": _worker_history_trend(history),
+    }
 
 
 @app.get("/worker/history.csv", response_class=PlainTextResponse)
@@ -427,11 +493,7 @@ def ui_diagnostics(
     collector_type: str = "",
     has_error: str = "",
 ) -> str:
-    has_error_value: bool | None = None
-    if has_error == "1":
-        has_error_value = True
-    elif has_error == "0":
-        has_error_value = False
+    has_error_value = _parse_has_error(has_error)
 
     history = worker.history(
         limit=100,
@@ -448,32 +510,23 @@ def ui_diagnostics(
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
 
-    total = len(history)
-    errors = sum(1 for r in history if r.get("last_error"))
-    ok = total - errors
-    accepted_sum = sum(int(r.get("accepted_events", 0)) for r in history)
+    summary = _worker_history_summary(history)
 
-    by_type: dict[str, dict[str, int]] = {}
-    for r in history:
-        ctype = str(r.get("collector_type", "unknown"))
-        bucket = by_type.setdefault(ctype, {"ok": 0, "err": 0})
-        if r.get("last_error"):
-            bucket["err"] += 1
-        else:
-            bucket["ok"] += 1
+    by_type = _worker_history_by_type(history)
 
     bars = []
-    max_total = max((v["ok"] + v["err"] for v in by_type.values()), default=1)
-    for ctype, v in sorted(by_type.items()):
-        width = int(((v["ok"] + v["err"]) / max_total) * 240)
+    max_total = max((int(v["runs"]) for v in by_type), default=1)
+    for v in by_type:
+        ctype = str(v["collector_type"])
+        width = int((int(v["runs"]) / max_total) * 240)
         bars.append(
-            f"<div><b>{ctype}</b> ok={v['ok']} err={v['err']}<div style='background:#ddd;width:240px;height:12px'>"
-            f"<div style='background:{'#d9534f' if v['err'] else '#5cb85c'};width:{width}px;height:12px'></div></div></div>"
+            f"<div><b>{ctype}</b> ok={v['ok']} err={v['errors']}<div style='background:#ddd;width:240px;height:12px'>"
+            f"<div style='background:{'#d9534f' if v['errors'] else '#5cb85c'};width:{width}px;height:12px'></div></div></div>"
         )
     bars_html = "".join(bars) or "<i>No data for chart</i>"
 
     trend_points = []
-    trend_values = [int(r.get("accepted_events", 0)) for r in history[::-1]]
+    trend_values = [int(r["accepted_events"]) for r in _worker_history_trend(history)]
     max_val = max(trend_values, default=1)
     for i, val in enumerate(trend_values):
         x = 10 + i * 14
@@ -493,7 +546,7 @@ def ui_diagnostics(
       <h1>Worker diagnostics</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
       <div style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
-        <b>Summary:</b> runs={total}, ok={ok}, errors={errors}, accepted_events_sum={accepted_sum}
+        <b>Summary:</b> runs={summary['runs']}, ok={summary['ok']}, errors={summary['errors']}, accepted_events_sum={summary['accepted_events_sum']}
       </div>
       <h3>Errors by collector type</h3>
       {bars_html}
@@ -603,7 +656,7 @@ def dashboard() -> str:
                     <div style='width:{crit_pct}%;background:#ef4f4f;'></div>
                   </div>
                   <p style='font-size:13px;color:#5b6c7d;'>Info {info_pct}% · Warning {warn_pct}% · Critical {crit_pct}%</p>
-                  <p style='margin:0;font-size:13px;'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
+                  <p style='margin:0;font-size:13px;' id='worker-health-widget'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · tracked {worker_health_data['tracked']} · failed {worker_health_data['failed']} · cycles {worker_health_data['cycle_count']} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
                 </div>
               </div>
 
@@ -640,6 +693,22 @@ def dashboard() -> str:
             </section>
           </main>
         </div>
+        <script>
+          async function refreshWorkerHealthWidget() {{
+            try {{
+              const resp = await fetch('/worker/health');
+              if (!resp.ok) return;
+              const payload = await resp.json();
+              const widget = document.getElementById('worker-health-widget');
+              if (!widget) return;
+              const state = payload.running ? 'running' : 'stopped';
+              widget.innerHTML = `<b>Worker health:</b> ${{state}} · tracked ${{payload.tracked}} · failed ${{payload.failed}} · cycles ${{payload.cycle_count}} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a>`;
+            }} catch (_e) {{
+              // ignore widget refresh errors to keep dashboard stable
+            }}
+          }}
+          setInterval(refreshWorkerHealthWidget, 5000);
+        </script>
       </body>
     </html>
     """
