@@ -531,37 +531,117 @@ def ui_diagnostics(
 def dashboard() -> str:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
-    rows = []
-    for asset in service.list_assets():
-        alerts_count = len(service.build_alerts(asset.id))
+
+    assets = service.list_assets()
+    severity_counts = {"info": 0, "warning": 0, "critical": 0}
+    asset_rows = []
+    recent_alerts: list[str] = []
+
+    for asset in assets:
+        events = service.list_events(asset.id)
+        alerts = service.build_alerts(asset.id)
         insights_count = len(service.build_correlation_insights(asset.id))
-        events_count = len(service.list_events(asset.id))
-        rows.append(
-            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
+
+        for event in events:
+            severity_counts[event.severity.value] += 1
+        recent_alerts.extend([f"{asset.name}: {a.reason}" for a in alerts])
+
+        asset_rows.append(
+            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td><td>{asset.asset_type.value}</td>"
+            f"<td>{asset.location or '-'}</td><td>{len(events)}</td><td>{len(alerts)}</td><td>{insights_count}</td></tr>"
         )
 
-    rows_html = "".join(rows) if rows else "<tr><td colspan='6'>No assets yet</td></tr>"
+    events_total = max(overview_data["events_total"], 1)
+    info_pct = int(severity_counts["info"] * 100 / events_total)
+    warn_pct = int(severity_counts["warning"] * 100 / events_total)
+    crit_pct = max(0, 100 - info_pct - warn_pct)
+    trend_points = "30,90 120,45 210,55 300,25 390,35 480,20"
+
+    alerts_html = "".join(f"<li>{alert}</li>" for alert in recent_alerts[:7]) or "<li>No alerts yet</li>"
+    rows_html = "".join(asset_rows) if asset_rows else "<tr><td colspan='7'>No assets yet</td></tr>"
+
     return f"""
-    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
-      <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a> | <a href='/ui/diagnostics'>Worker diagnostics</a></p>
-      <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
-      Critical assets: <b>{overview_data['critical_assets']}</b></p>
-      <div style='padding: 12px; border: 1px solid #ccc; margin: 12px 0; background: #f9f9f9;'>
-        <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'}
-        | enabled: {worker_health_data['enabled']}
-        | tracked: {worker_health_data['tracked']}
-        | failed: {worker_health_data['failed']}
-        | stale: {worker_health_data['stale']}
-        | cycles: {worker_health_data['cycle_count']}
-        | <a href='/worker/health'>JSON</a>
-      </div>
-      <table border='1' cellpadding='8' cellspacing='0'>
-        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </body></html>
+    <html>
+      <body style='margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#eef2f6;color:#18202a;'>
+        <div style='display:flex;min-height:100vh;'>
+          <aside style='width:86px;background:#273543;color:#fff;padding:14px 10px;'>
+            <div style='font-weight:700;font-size:20px;text-align:center;margin:8px 0 24px;'>IM</div>
+            <div style='padding:10px 8px;border-left:3px solid #87d04a;background:#324657;border-radius:4px;margin-bottom:8px;'>Overview</div>
+            <div style='padding:10px 8px;opacity:.85;'>Assets</div>
+            <div style='padding:10px 8px;opacity:.85;'>Alerts</div>
+            <div style='padding:10px 8px;opacity:.85;'>Collectors</div>
+          </aside>
+
+          <main style='flex:1;'>
+            <header style='background:#374957;color:#fff;padding:14px 22px;display:flex;justify-content:space-between;align-items:center;'>
+              <div style='display:flex;gap:20px;font-weight:600;'>
+                <span>Dashboard</span><span style='opacity:.8;'>Reports</span><span style='opacity:.8;'>Security</span><span style='opacity:.8;'>Settings</span>
+              </div>
+              <div style='font-size:14px;opacity:.9;'>InfraMind Monitor</div>
+            </header>
+
+            <section style='padding:18px;'>
+              <div style='display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-bottom:14px;'>
+                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>All Events</div><div style='font-size:34px;font-weight:700;'>{overview_data['events_total']}</div><div style='font-size:13px;color:#2f9d44;'>info {severity_counts['info']} · warn {severity_counts['warning']} · crit {severity_counts['critical']}</div></div>
+                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Assets</div><div style='font-size:34px;font-weight:700;'>{overview_data['assets_total']}</div><div style='font-size:13px;color:#5b6c7d;'>critical assets: {overview_data['critical_assets']}</div></div>
+                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Worker</div><div style='font-size:34px;font-weight:700;'>{'OK' if worker_health_data['running'] else 'DOWN'}</div><div style='font-size:13px;color:#5b6c7d;'>tracked {worker_health_data['tracked']} · failed {worker_health_data['failed']}</div></div>
+                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Collectors</div><div style='font-size:34px;font-weight:700;'>{len(service.list_collector_targets())}</div><div style='font-size:13px;color:#5b6c7d;'>cycles {worker_health_data['cycle_count']}</div></div>
+              </div>
+
+              <div style='display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px;'>
+                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
+                  <h3 style='margin:0 0 8px;'>Logs Trend</h3>
+                  <svg viewBox='0 0 520 110' style='width:100%;height:140px;background:#f7fbff;border:1px solid #e3ebf3;border-radius:6px;'>
+                    <polyline points='{trend_points}' fill='rgba(40,141,205,0.18)' stroke='#1c8ece' stroke-width='3'></polyline>
+                  </svg>
+                </div>
+                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
+                  <h3 style='margin:0 0 8px;'>Severity Mix</h3>
+                  <div style='height:12px;background:#eaf0f7;border-radius:999px;overflow:hidden;display:flex;'>
+                    <div style='width:{info_pct}%;background:#1a8fcf;'></div>
+                    <div style='width:{warn_pct}%;background:#f59d1a;'></div>
+                    <div style='width:{crit_pct}%;background:#ef4f4f;'></div>
+                  </div>
+                  <p style='font-size:13px;color:#5b6c7d;'>Info {info_pct}% · Warning {warn_pct}% · Critical {crit_pct}%</p>
+                  <p style='margin:0;font-size:13px;'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
+                </div>
+              </div>
+
+              <div style='display:grid;grid-template-columns:2fr 1fr;gap:12px;'>
+                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
+                  <h3 style='margin:0 0 10px;'>Assets Matrix</h3>
+                  <table style='width:100%;border-collapse:collapse;font-size:14px;'>
+                    <thead>
+                      <tr style='text-align:left;background:#f5f8fc;'>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>ID</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Name</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Type</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Location</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Events</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Alerts</th>
+                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Insights</th>
+                      </tr>
+                    </thead>
+                    <tbody>{rows_html}</tbody>
+                  </table>
+                </div>
+                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
+                  <h3 style='margin:0 0 10px;'>Recent Alerts</h3>
+                  <ul style='margin:0;padding-left:18px;display:grid;gap:8px;font-size:14px;line-height:1.3;'>{alerts_html}</ul>
+                  <hr style='border:none;border-top:1px solid #e6edf5;margin:12px 0;'>
+                  <div style='display:grid;gap:6px;font-size:13px;'>
+                    <a href='/ui/assets'>Manage assets</a>
+                    <a href='/ui/events'>Send event</a>
+                    <a href='/ui/collectors'>Collector targets</a>
+                    <a href='/worker/targets'>Worker targets</a>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      </body>
+    </html>
     """
 
 

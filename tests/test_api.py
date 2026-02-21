@@ -112,6 +112,23 @@ def test_dedup_batch_ingest() -> None:
     assert ingest_resp.json()["accepted"] == 1
 
 
+def test_dashboard_renders_new_layout_blocks() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-ui", "name": "srv-ui", "asset_type": "server", "location": "R7"},
+    )
+    client.post(
+        "/events",
+        json={"asset_id": "srv-ui", "source": "manual", "message": "CPU high", "severity": "warning"},
+    )
+
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "Assets Matrix" in resp.text
+    assert "Severity Mix" in resp.text
+    assert "Recent Alerts" in resp.text
+
+
 
 
 def test_winrm_pull_uses_target_options() -> None:
