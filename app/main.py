@@ -32,6 +32,12 @@ from app.models import (
     Event,
     EventBatch,
     IngestSummary,
+    LogAnalyticsInsight,
+    LogAnalyticsOverview,
+    LogAnalyticsPolicy,
+    LogAnalyticsPolicyAuditEntry,
+    LogAnalyticsPolicyDryRun,
+    PolicyMergeStrategy,
     Overview,
     Recommendation,
     Severity,
@@ -677,6 +683,7 @@ def ui_compliance(request: Request, limit: int = 30) -> str:
           <h3 style='margin-top:0'>Retention purge</h3>
           <label>Audit max age sec <input type='number' name='audit_max_age_sec' value='2592000' min='0' /></label><br/><br/>
           <label>Worker history max age sec <input type='number' name='worker_history_max_age_sec' value='2592000' min='0' /></label><br/><br/>
+          <label>AI policy audit max age sec <input type='number' name='ai_policy_audit_max_age_sec' value='2592000' min='0' /></label><br/><br/>
           <label><input type='checkbox' name='drop_jwt_reject_telemetry'/> Drop JWT reject telemetry</label><br/><br/>
           <button type='submit'>Run purge</button>
         </form>
@@ -709,6 +716,7 @@ def ui_compliance_purge(
     request: Request,
     audit_max_age_sec: int = Form(30 * 24 * 3600),
     worker_history_max_age_sec: int = Form(30 * 24 * 3600),
+    ai_policy_audit_max_age_sec: int = Form(30 * 24 * 3600),
     drop_jwt_reject_telemetry: str | None = Form(None),
 ) -> RedirectResponse:
     context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
@@ -719,6 +727,7 @@ def ui_compliance_purge(
     worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
     service.delete_access_audit_older_than(audit_min_ts)
     service.delete_worker_history_older_than(worker_min_ts_iso)
+    service.delete_ai_log_policy_audit_older_than(now - max(0, ai_policy_audit_max_age_sec))
     if drop_jwt_reject_telemetry is not None:
         JWT_REJECT_TELEMETRY.clear()
         JWT_REJECT_BY_ISSUER_CLIENT.clear()
@@ -1401,6 +1410,7 @@ def auth_compliance_purge(
     request: Request,
     audit_max_age_sec: int = 30 * 24 * 3600,
     worker_history_max_age_sec: int = 30 * 24 * 3600,
+    ai_policy_audit_max_age_sec: int = 30 * 24 * 3600,
     drop_jwt_reject_telemetry: bool = False,
     _role: str = Depends(_require_admin_dependency),
 ) -> dict[str, int | bool]:
@@ -1409,6 +1419,7 @@ def auth_compliance_purge(
     worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
     deleted_audit = service.delete_access_audit_older_than(audit_min_ts)
     deleted_worker_history = service.delete_worker_history_older_than(worker_min_ts_iso)
+    deleted_ai_policy_audit = service.delete_ai_log_policy_audit_older_than(now - max(0, ai_policy_audit_max_age_sec))
     if drop_jwt_reject_telemetry:
         JWT_REJECT_TELEMETRY.clear()
         JWT_REJECT_BY_ISSUER_CLIENT.clear()
@@ -1416,6 +1427,7 @@ def auth_compliance_purge(
     return {
         "deleted_audit": deleted_audit,
         "deleted_worker_history": deleted_worker_history,
+        "deleted_ai_policy_audit": deleted_ai_policy_audit,
         "jwt_reject_telemetry_cleared": drop_jwt_reject_telemetry,
     }
 
@@ -2142,6 +2154,241 @@ def list_insights(request: Request, asset_id: str, tenant_id: str | None = None)
         raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.build_correlation_insights(asset_id)
 
+
+
+
+@app.get("/ai-log-analytics/policies", response_model=list[LogAnalyticsPolicy])
+def list_ai_log_policies(request: Request, enabled_only: bool = False, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> list[LogAnalyticsPolicy]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    return service.list_ai_log_policies(enabled_only=enabled_only, tenant_id=tenant_scope)
+
+
+@app.post("/ai-log-analytics/policies", response_model=LogAnalyticsPolicy)
+def upsert_ai_log_policy(request: Request, policy: LogAnalyticsPolicy, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> LogAnalyticsPolicy:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if tenant_scope and policy.tenant_id and policy.tenant_id != tenant_scope:
+        raise HTTPException(status_code=403, detail="Policy tenant is out of scope")
+    if tenant_scope and not policy.tenant_id:
+        policy = policy.model_copy(update={"tenant_id": tenant_scope})
+    stored = service.upsert_ai_log_policy(policy)
+    service.add_ai_log_policy_audit(
+        LogAnalyticsPolicyAuditEntry(
+            ts=int(time.time()),
+            policy_id=stored.id,
+            tenant_id=stored.tenant_id,
+            action="upsert",
+            actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
+            details=f"enabled={stored.enabled};sources={len(stored.ignore_sources)};signatures={len(stored.ignore_signatures)}",
+        )
+    )
+    return stored
+
+
+@app.delete("/ai-log-analytics/policies/{policy_id}")
+def delete_ai_log_policy(request: Request, policy_id: str, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> dict[str, str]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    try:
+        service.delete_ai_log_policy(policy_id, tenant_id=tenant_scope)
+        service.add_ai_log_policy_audit(
+            LogAnalyticsPolicyAuditEntry(
+                ts=int(time.time()),
+                policy_id=policy_id,
+                tenant_id=tenant_scope,
+                action="delete",
+                actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
+                details="deleted via API",
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": policy_id}
+
+
+@app.get("/ai-log-analytics/policies/audit", response_model=list[LogAnalyticsPolicyAuditEntry])
+def list_ai_log_policy_audit(
+    request: Request,
+    limit: int = 100,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    _role: str = Depends(_require_admin_dependency),
+) -> list[LogAnalyticsPolicyAuditEntry]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    sort_norm = str(sort).strip().lower()
+    if sort_norm not in {"asc", "desc"}:
+        raise HTTPException(status_code=422, detail="sort must be 'asc' or 'desc'")
+    return service.list_ai_log_policy_audit(
+        limit=limit,
+        tenant_id=tenant_scope,
+        action=action.strip() if action else None,
+        policy_id=policy_id.strip() if policy_id else None,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort_norm,
+        offset=max(0, offset),
+    )
+
+
+@app.get("/ai-log-analytics/policies/audit.csv", response_class=PlainTextResponse)
+def ai_log_policy_audit_csv(
+    request: Request,
+    limit: int = 1000,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    _role: str = Depends(_require_admin_dependency),
+) -> str:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    sort_norm = sort.strip().lower()
+    if sort_norm not in {"asc", "desc"}:
+        raise HTTPException(status_code=422, detail="sort must be 'asc' or 'desc'")
+    rows = service.list_ai_log_policy_audit(
+        limit=limit,
+        tenant_id=tenant_scope,
+        action=action.strip() if action else None,
+        policy_id=policy_id.strip() if policy_id else None,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort_norm,
+        offset=max(0, offset),
+    )
+    header = 'ts,policy_id,tenant_id,action,actor_role,details\n'
+    body = ''.join(
+        f'"{row.ts}","{row.policy_id}","{row.tenant_id or ""}","{row.action}","{row.actor_role}","{row.details}"\n'
+        for row in rows
+    )
+    return header + body
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/policy-dry-run", response_model=LogAnalyticsPolicyDryRun)
+def ai_log_policy_dry_run(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    tenant_id: str | None = None,
+) -> LogAnalyticsPolicyDryRun:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+
+    parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+    parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+    parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+
+    try:
+        return service.preview_ai_log_policy_effect(
+            asset_id=asset_id,
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            limit=min(max(limit, 20), 2000),
+            tenant_id=tenant_scope,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/ai-log-analytics/overview", response_model=LogAnalyticsOverview)
+def get_ai_log_analytics_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 50,
+    max_clusters: int = 30,
+    max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    tenant_id: str | None = None,
+) -> LogAnalyticsOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+    parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+    parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+
+    try:
+        resolved_sources, resolved_signatures = service.resolve_ai_log_filters(
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            tenant_id=tenant_scope,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return service.build_log_analytics_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_clusters=min(max(max_clusters, 5), 100),
+        max_anomalies=min(max(max_anomalies, 1), 100),
+        ignore_sources=resolved_sources,
+        ignore_signatures=resolved_signatures,
+        asset_ids=tenant_assets,
+    )
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics", response_model=LogAnalyticsInsight)
+def get_ai_log_analytics(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    max_clusters: int = 30,
+    max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    tenant_id: str | None = None,
+) -> LogAnalyticsInsight:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+        parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+        parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+        resolved_sources, resolved_signatures = service.resolve_ai_log_filters(
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            tenant_id=tenant_scope,
+        )
+        return service.build_log_analytics(
+            asset_id,
+            limit=min(max(limit, 20), 2000),
+            max_clusters=min(max(max_clusters, 5), 100),
+            max_anomalies=min(max(max_anomalies, 1), 100),
+            ignore_sources=resolved_sources,
+            ignore_signatures=resolved_signatures,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
 def get_recommendation(request: Request, asset_id: str, tenant_id: str | None = None) -> Recommendation:
