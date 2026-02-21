@@ -651,6 +651,21 @@ def test_storage_migrates_events_fingerprint_column() -> None:
 
 
 
+
+
+def test_worker_sensitive_endpoints_forbid_viewer_role() -> None:
+    assert client.get("/worker/history?role=viewer").status_code == 403
+    assert client.get("/worker/history.csv?role=viewer").status_code == 403
+    assert client.get("/worker/targets?role=viewer").status_code == 403
+    assert client.post("/worker/run-once?role=viewer").status_code == 403
+
+
+def test_ui_diagnostics_viewer_role_hides_raw_history() -> None:
+    resp = client.get("/ui/diagnostics?role=viewer")
+    assert resp.status_code == 200
+    assert "Current role: <b>viewer</b>" in resp.text
+    assert "raw history limited by role" in resp.text
+
 def test_worker_diagnostics_stream_endpoint() -> None:
     client.post(
         "/assets",

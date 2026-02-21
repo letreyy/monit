@@ -437,6 +437,20 @@ def _parse_has_error_filter(has_error: str | None) -> bool | None:
     return None
 
 
+def _normalize_role(role: str | None) -> str:
+    if role in {"viewer", "operator", "admin"}:
+        return str(role)
+    return "viewer"
+
+
+def _can_view_worker_history(role: str) -> bool:
+    return role in {"operator", "admin"}
+
+
+def _can_control_worker(role: str) -> bool:
+    return role in {"operator", "admin"}
+
+
 def _build_diagnostics_summary(history: list[dict]) -> dict:
     total = len(history)
     errors = sum(1 for r in history if r.get("last_error"))
@@ -488,7 +502,11 @@ def worker_history(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: bool | None = None,
+    role: str = "admin",
 ) -> list[dict]:
+    role_value = _normalize_role(role)
+    if not _can_view_worker_history(role_value):
+        raise HTTPException(status_code=403, detail="Role is not allowed to read worker history")
     return worker.history(
         limit=limit,
         target_id=target_id,
@@ -503,7 +521,11 @@ def worker_history_csv(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
+    role: str = "admin",
 ) -> str:
+    role_value = _normalize_role(role)
+    if not _can_view_worker_history(role_value):
+        raise HTTPException(status_code=403, detail="Role is not allowed to export worker history")
     rows = worker.history(
         limit=limit,
         target_id=target_id,
@@ -538,11 +560,14 @@ def worker_diagnostics_summary(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
+    role: str = "viewer",
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
+    role_value = _normalize_role(role)
+    history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     history = worker.history(
-        limit=limit,
+        limit=history_limit,
         target_id=target_id,
         collector_type=collector_type,
         has_error=has_error_value,
@@ -556,11 +581,14 @@ def worker_diagnostics_trend(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
+    role: str = "viewer",
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
+    role_value = _normalize_role(role)
+    history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     history = worker.history(
-        limit=limit,
+        limit=history_limit,
         target_id=target_id,
         collector_type=collector_type,
         has_error=has_error_value,
@@ -576,14 +604,17 @@ async def worker_diagnostics_stream(
     has_error: str | None = None,
     tick_sec: float = 3.0,
     max_events: int | None = None,
+    role: str = "viewer",
 ) -> StreamingResponse:
     has_error_value = _parse_has_error_filter(has_error)
+    role_value = _normalize_role(role)
+    history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     async def event_stream():
         sent = 0
         while True:
             history = worker.history(
-                limit=limit,
+                limit=history_limit,
                 target_id=target_id,
                 collector_type=collector_type,
                 has_error=has_error_value,
@@ -606,15 +637,21 @@ def ui_diagnostics(
     target_id: str = "",
     collector_type: str = "",
     has_error: str = "",
+    role: str = "viewer",
 ) -> str:
     has_error_value = _parse_has_error_filter(has_error)
+    role_value = _normalize_role(role)
 
-    history = worker.history(
-        limit=100,
-        target_id=target_id.strip() or None,
-        collector_type=collector_type.strip() or None,
-        has_error=has_error_value,
-    )
+    history: list[dict]
+    if _can_view_worker_history(role_value):
+        history = worker.history(
+            limit=100,
+            target_id=target_id.strip() or None,
+            collector_type=collector_type.strip() or None,
+            has_error=has_error_value,
+        )
+    else:
+        history = []
     rows = []
     for row in history:
         rows.append(
@@ -623,11 +660,12 @@ def ui_diagnostics(
             f"<td>{row.get('last_error') or '-'}</td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
-    qs = f"limit=100&target_id={target_id}&collector_type={collector_type}&has_error={has_error}"
+    qs = f"limit=100&target_id={target_id}&collector_type={collector_type}&has_error={has_error}&role={role_value}"
 
     return f"""
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
       <h1>Worker diagnostics</h1>
+      <p class='muted'>Current role: <b>{role_value}</b>{' (raw history limited by role)' if not _can_view_worker_history(role_value) else ''}</p>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
       <div id='diag-summary' style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
         <b>Summary:</b> loading...
@@ -653,9 +691,16 @@ def ui_diagnostics(
             <option value='0' {'selected' if has_error == '0' else ''}>only ok</option>
           </select>
         </label>
+        <label>Role
+          <select name='role'>
+            <option value='viewer' {'selected' if role_value == 'viewer' else ''}>viewer</option>
+            <option value='operator' {'selected' if role_value == 'operator' else ''}>operator</option>
+            <option value='admin' {'selected' if role_value == 'admin' else ''}>admin</option>
+          </select>
+        </label>
         <button type='submit'>Apply</button>
       </form>
-      <p><a href='/worker/history.csv?target_id={target_id}&collector_type={collector_type}&has_error={has_error}'>Download filtered CSV</a></p>
+      <p><a href='/worker/history.csv?target_id={target_id}&collector_type={collector_type}&has_error={has_error}&role={role_value}'>Download filtered CSV</a></p>
       <table border='1' cellpadding='8' cellspacing='0'>
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
         <tbody>{rows_html}</tbody>
@@ -1033,12 +1078,18 @@ def worker_status() -> dict:
 
 
 @app.get("/worker/targets")
-def worker_targets() -> list[dict]:
+def worker_targets(role: str = "admin") -> list[dict]:
+    role_value = _normalize_role(role)
+    if not _can_view_worker_history(role_value):
+        raise HTTPException(status_code=403, detail="Role is not allowed to read worker targets")
     return worker.target_status()
 
 
 @app.post("/worker/run-once")
-def worker_run_once() -> dict[str, int]:
+def worker_run_once(role: str = "admin") -> dict[str, int]:
+    role_value = _normalize_role(role)
+    if not _can_control_worker(role_value):
+        raise HTTPException(status_code=403, detail="Role is not allowed to run worker")
     accepted = worker.run_once()
     return {"accepted": accepted}
 

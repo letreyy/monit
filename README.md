@@ -707,3 +707,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: перенести ту же RBAC + filter-модель на diagnostics (включая data endpoints) и добавить server-side ограничения на чувствительные endpoint'ы, а не только UI-visibility.
+
+## Следующий шаг (реализовано): RBAC + server-side ограничения для worker endpoints
+
+Сделали следующий шаг roadmap:
+
+- role/filer-модель перенесена на diagnostics (`role` добавлен в summary/trend/stream/UI);
+- добавлены server-side ограничения для чувствительных worker endpoint'ов:
+  - `GET /worker/history`
+  - `GET /worker/history.csv`
+  - `GET /worker/targets`
+  - `POST /worker/run-once`
+  (`viewer` получает `403`);
+- `ui/diagnostics` показывает текущую роль и в режиме `viewer` работает как ограниченный diagnostics-view без raw history.
+
+### Что дальше по плану
+
+Следующий шаг: ввести реальную аутентификацию (не query-параметр role), выдачу роли из auth-контекста и применить те же server-side policy-check'и к остальным чувствительным API (collectors/events ingestion/admin actions).
