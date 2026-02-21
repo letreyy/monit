@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  inframind:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: inframind-monitor
+    restart: unless-stopped
+    ports:
+      - "8050:8050"
+    environment:
+      APP_ENV: production
+      TZ: UTC
+      ENABLE_AGENTLESS_WORKER: "1"
+      WORKER_TICK_SEC: "2"
+      WORKER_TIMEOUT_SEC: "2"
+      APP_SECRET_KEY: ""
+      AUTH_TOKENS: ""
+      AUTH_USERS: "admin:admin123:admin,ops:ops123:operator,viewer:viewer123:viewer"
+      SESSION_TTL_SEC: "86400"
+      SESSION_SECRET: "change-me"
+      SESSION_COOKIE_NAME: "auth_session"
+      ALLOW_QUERY_ROLE: "0"
+      TOKEN_TTL_SEC: "3600"
+      TOKEN_SECRET: "change-token-secret"
+      AUTH_JWT_HS256_SECRET: ""
+      AUTH_JWT_ISSUER: ""
+      AUTH_JWT_AUDIENCE: ""
+      AUTH_JWT_ROLE_CLAIM: "role"
+      AUTH_JWKS_URL: ""
+      AUTH_OIDC_DISCOVERY_URL: ""
+      AUTH_JWKS_CACHE_TTL_SEC: "300"
+      AUTH_JWT_LEEWAY_SEC: "30"
+      AUTH_ROLE_SCOPES_MAP: "monitor.admin:admin,monitor.write:operator,monitor.read:viewer"
+      AUTH_ROLE_GROUPS_MAP: "admins:admin,operators:operator,viewers:viewer"
+    volumes:
+      - inframind_data:/app/data
+
+volumes:
+  inframind_data:
