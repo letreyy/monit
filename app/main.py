@@ -1,6 +1,10 @@
 import os
 import json
 import asyncio
+import hmac
+import time
+import hashlib
+import base64
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter
@@ -8,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
 
 from app.models import (
     Alert,
@@ -33,7 +37,10 @@ WORKER_TICK_SEC = float(os.getenv("WORKER_TICK_SEC", "2"))
 WORKER_TIMEOUT_SEC = float(os.getenv("WORKER_TIMEOUT_SEC", "2"))
 worker = AgentlessWorker(service, tick_sec=WORKER_TICK_SEC, timeout_sec=WORKER_TIMEOUT_SEC)
 ENABLE_AGENTLESS_WORKER = os.getenv("ENABLE_AGENTLESS_WORKER", "1") == "1"
-ALLOW_QUERY_ROLE = os.getenv("ALLOW_QUERY_ROLE", "1") == "1"
+ALLOW_QUERY_ROLE = os.getenv("ALLOW_QUERY_ROLE", "0") == "1"
+SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "auth_session")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
+SESSION_TTL_SEC = int(os.getenv("SESSION_TTL_SEC", "86400"))
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -48,7 +55,52 @@ def _load_auth_token_roles() -> dict[str, str]:
     return mapping
 
 
+def _load_auth_users() -> dict[str, tuple[str, str]]:
+    raw = os.getenv("AUTH_USERS", "admin:admin123:admin,ops:ops123:operator,viewer:viewer123:viewer")
+    users: dict[str, tuple[str, str]] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = item.split(":")
+        if len(parts) != 3:
+            continue
+        username, password, role = parts
+        users[username.strip()] = (password.strip(), role.strip())
+    return users
+
+
+def _session_sign(payload: str) -> str:
+    sig = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return sig
+
+
+def _create_session_value(role: str) -> str:
+    exp = int(time.time()) + SESSION_TTL_SEC
+    payload = f"{role}|{exp}"
+    sig = _session_sign(payload)
+    raw = f"{payload}|{sig}".encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def _parse_session_value(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(value.encode()).decode()
+        role, exp_s, sig = decoded.split("|", 2)
+        payload = f"{role}|{exp_s}"
+        if not hmac.compare_digest(sig, _session_sign(payload)):
+            return None
+        if int(exp_s) < int(time.time()):
+            return None
+        return _normalize_role(role)
+    except Exception:
+        return None
+
+
 AUTH_TOKEN_ROLE_MAP = _load_auth_token_roles()
+AUTH_USER_MAP = _load_auth_users()
 
 
 @asynccontextmanager
@@ -472,6 +524,12 @@ def _resolve_role_from_request(
     role_hint: str | None,
     default_role: str,
 ) -> str:
+    authz = request.headers.get("Authorization", "").strip()
+    if authz.lower().startswith("bearer "):
+        token = authz.split(" ", 1)[1].strip()
+        if token in AUTH_TOKEN_ROLE_MAP:
+            return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
+
     token = request.headers.get("X-Auth-Token", "").strip()
     if token and token in AUTH_TOKEN_ROLE_MAP:
         return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
@@ -480,6 +538,10 @@ def _resolve_role_from_request(
     if header_role:
         return _normalize_role(header_role)
 
+    session_role = _parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))
+    if session_role:
+        return session_role
+
     if ALLOW_QUERY_ROLE and role_hint:
         return _normalize_role(role_hint)
 
@@ -487,6 +549,13 @@ def _resolve_role_from_request(
 
 
 ROLE_ORDER = {"viewer": 0, "operator": 1, "admin": 2}
+ACCESS_AUDIT: list[dict[str, str | int]] = []
+
+
+def _append_access_audit(entry: dict[str, str | int]) -> None:
+    ACCESS_AUDIT.append(entry)
+    if len(ACCESS_AUDIT) > 500:
+        del ACCESS_AUDIT[:-500]
 
 
 def _require_role(
@@ -498,7 +567,25 @@ def _require_role(
 ) -> str:
     role_value = _resolve_role_from_request(request, role_hint, default_role=default_role)
     if ROLE_ORDER[role_value] < ROLE_ORDER[minimum_role]:
+        _append_access_audit(
+            {
+                "ts": int(time.time()),
+                "path": request.url.path,
+                "role": role_value,
+                "action": action,
+                "result": "deny",
+            }
+        )
         raise HTTPException(status_code=403, detail=f"Role '{role_value}' is not allowed to {action}")
+    _append_access_audit(
+        {
+            "ts": int(time.time()),
+            "path": request.url.path,
+            "role": role_value,
+            "action": action,
+            "result": "allow",
+        }
+    )
     return role_value
 
 
@@ -507,9 +594,41 @@ def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bo
     resolved = _resolve_role_from_request(request, role, default_role="viewer")
     return {
         "role": resolved,
-        "has_token": bool(request.headers.get("X-Auth-Token", "").strip()),
+        "has_token": bool(request.headers.get("X-Auth-Token", "").strip() or request.headers.get("Authorization", "")),
+        "has_session": bool(_parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))),
         "used_query_role_hint": bool(role),
+        "allow_query_role": ALLOW_QUERY_ROLE,
     }
+
+
+@app.post("/auth/login")
+def auth_login(username: str = Form(...), password: str = Form(...)) -> JSONResponse:
+    record = AUTH_USER_MAP.get(username.strip())
+    if not record or record[0] != password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    role = _normalize_role(record[1])
+    response = JSONResponse({"status": "ok", "role": role})
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=_create_session_value(role),
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_SEC,
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def auth_logout() -> JSONResponse:
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
+
+@app.get("/auth/audit")
+def auth_audit(request: Request, role: str | None = None, limit: int = 100) -> list[dict[str, str | int]]:
+    _require_role(request, role, minimum_role="admin", action="read access audit", default_role="viewer")
+    return ACCESS_AUDIT[-max(1, min(limit, 500)):]
 
 
 def _build_diagnostics_summary(history: list[dict]) -> dict:

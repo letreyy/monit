@@ -16,6 +16,12 @@ services:
       WORKER_TICK_SEC: "2"
       WORKER_TIMEOUT_SEC: "2"
       APP_SECRET_KEY: ""
+      AUTH_TOKENS: ""
+      AUTH_USERS: "admin:admin123:admin,ops:ops123:operator,viewer:viewer123:viewer"
+      SESSION_TTL_SEC: "86400"
+      SESSION_SECRET: "change-me"
+      SESSION_COOKIE_NAME: "auth_session"
+      ALLOW_QUERY_ROLE: "0"
     volumes:
       - inframind_data:/app/data
 

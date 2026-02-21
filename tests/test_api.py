@@ -478,8 +478,8 @@ def test_dashboard_data_filters() -> None:
 
 
 def test_dashboard_data_role_permissions() -> None:
-    viewer = client.get("/dashboard/data?role=viewer").json()
-    operator = client.get("/dashboard/data?role=operator").json()
+    viewer = client.get("/dashboard/data", headers={"X-Role": "viewer"}).json()
+    operator = client.get("/dashboard/data", headers={"X-Role": "operator"}).json()
 
     assert viewer["role"] == "viewer"
     assert viewer["permissions"]["show_recent_alerts"] is False
@@ -767,6 +767,26 @@ def test_collector_and_ingest_endpoints_allow_operator_header_role() -> None:
     )
     assert batch.status_code == 200
 
+
+
+def test_auth_login_and_session_cookie_role_resolution() -> None:
+    resp = client.post("/auth/login", data={"username": "ops", "password": "ops123"})
+    assert resp.status_code == 200
+    assert "auth_session" in resp.cookies
+
+    whoami = client.get("/auth/whoami", cookies={"auth_session": resp.cookies.get("auth_session")})
+    assert whoami.status_code == 200
+    assert whoami.json()["role"] == "operator"
+
+
+def test_auth_audit_admin_only() -> None:
+    viewer = client.get("/auth/audit", headers={"X-Role": "viewer"})
+    assert viewer.status_code == 403
+
+    admin = client.get("/auth/audit", headers={"X-Role": "admin"})
+    assert admin.status_code == 200
+    assert isinstance(admin.json(), list)
+
 def test_auth_whoami_with_role_header() -> None:
     resp = client.get("/auth/whoami", headers={"X-Role": "operator"})
     assert resp.status_code == 200
@@ -789,15 +809,15 @@ def test_worker_sensitive_endpoints_allow_operator_header_role() -> None:
     assert client.get("/worker/targets", headers=headers).status_code == 200
     assert client.post("/worker/run-once", headers=headers).status_code == 200
 
-def test_worker_sensitive_endpoints_forbid_viewer_role() -> None:
-    assert client.get("/worker/history?role=viewer").status_code == 403
-    assert client.get("/worker/history.csv?role=viewer").status_code == 403
-    assert client.get("/worker/targets?role=viewer").status_code == 403
-    assert client.post("/worker/run-once?role=viewer").status_code == 403
+def test_worker_sensitive_endpoints_query_role_disabled_by_default() -> None:
+    assert client.get("/worker/history?role=viewer").status_code == 200
+    assert client.get("/worker/history.csv?role=viewer").status_code == 200
+    assert client.get("/worker/targets?role=viewer").status_code == 200
+    assert client.post("/worker/run-once?role=viewer").status_code == 200
 
 
 def test_ui_diagnostics_viewer_role_hides_raw_history() -> None:
-    resp = client.get("/ui/diagnostics?role=viewer")
+    resp = client.get("/ui/diagnostics", headers={"X-Role": "viewer"})
     assert resp.status_code == 200
     assert "Current role: <b>viewer</b>" in resp.text
     assert "raw history limited by role" in resp.text

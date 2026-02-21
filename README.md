@@ -753,3 +753,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: вынести role/policy в отдельный middleware/dependency слой (не в каждом endpoint вручную), добавить JWT/session auth provider и переключить production на `ALLOW_QUERY_ROLE=0` по умолчанию.
+
+## Следующий шаг (реализовано): auth-provider module + audit + secure-by-default fallback policy
+
+Сделали сразу укрупнённый модуль вместо мелких шагов:
+
+- добавлен auth-provider слой:
+  - `POST /auth/login` (session cookie),
+  - `POST /auth/logout`,
+  - `GET /auth/whoami`;
+- добавлен `GET /auth/audit` (admin-only) для просмотра deny/allow записей policy-check;
+- `ALLOW_QUERY_ROLE` переведён в secure-default (`0`) для production-профиля;
+- добавлены env-параметры для auth/session (`AUTH_USERS`, `AUTH_TOKENS`, `SESSION_SECRET`, `SESSION_TTL_SEC`, `SESSION_COOKIE_NAME`);
+- сохранена совместимость: query-role можно временно включить через `ALLOW_QUERY_ROLE=1`.
+
+### Что дальше по плану (крупными блоками)
+
+1. **Identity Module** — перейти с встроенного users-map на JWT/OIDC provider.
+2. **Policy Module** — вынести `_require_role` в dependency/middleware слой и покрыть все endpoint-группы единообразно.
+3. **Operations Module** — audit persistence (SQLite), ротация/экспорт, алерты по deny-spikes.
+4. **Product Module** — multi-tenant visibility + role-based UX presets для dashboard/diagnostics.
