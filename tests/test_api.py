@@ -1262,7 +1262,7 @@ def test_compliance_purge_and_delivery_routes() -> None:
     assert "email" in channels
 
     purge = client.post(
-        "/auth/compliance/purge?audit_max_age_sec=1&worker_history_max_age_sec=1&drop_jwt_reject_telemetry=true",
+        "/auth/compliance/purge?audit_max_age_sec=1&worker_history_max_age_sec=1&ai_policy_audit_max_age_sec=1&drop_jwt_reject_telemetry=true",
         headers={"X-Role": "admin"},
     )
     assert purge.status_code == 200
@@ -1317,7 +1317,7 @@ def test_ui_auth_and_compliance_console_flow() -> None:
     purge = client.post(
         "/ui/compliance/purge",
         headers=headers,
-        data={"audit_max_age_sec": "1", "worker_history_max_age_sec": "1", "drop_jwt_reject_telemetry": "on"},
+        data={"audit_max_age_sec": "1", "worker_history_max_age_sec": "1", "ai_policy_audit_max_age_sec": "1", "drop_jwt_reject_telemetry": "on"},
         follow_redirects=False,
     )
     assert purge.status_code == 303
@@ -1519,3 +1519,328 @@ def test_ai_log_analytics_ignore_signature() -> None:
     data = resp.json()
     assert data["analyzed_events"] == 0
     assert data["clusters"] == []
+
+
+def test_ai_log_analytics_overview_basic() -> None:
+    client.post("/assets", json={"id": "ov-1", "name": "ov-1", "asset_type": "server", "location": "R1"})
+    client.post("/assets", json={"id": "ov-2", "name": "ov-2", "asset_type": "server", "location": "R2"})
+
+    payload = {
+        "events": [
+            {"asset_id": "ov-1", "source": "linux", "message": "service timeout code=501", "severity": "warning"},
+            {"asset_id": "ov-1", "source": "linux", "message": "service timeout code=502", "severity": "warning"},
+            {"asset_id": "ov-1", "source": "linux", "message": "service timeout code=503", "severity": "warning"},
+            {"asset_id": "ov-2", "source": "windows_eventlog", "message": "Kernel panic on node 3", "severity": "critical"},
+        ]
+    }
+    ingest_resp = client.post("/ingest/events", json=payload)
+    assert ingest_resp.status_code == 200
+
+    resp = client.get("/ai-log-analytics/overview?limit_per_asset=200&max_assets=10")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assets_considered"] >= 2
+    assert "assets" in data
+    assert any(item["asset_id"] == "ov-1" for item in data["assets"])
+
+
+def test_ai_log_analytics_overview_ignore_source() -> None:
+    client.post("/assets", json={"id": "ov-ign", "name": "ov-ign", "asset_type": "server", "location": "R3"})
+    payload = {
+        "events": [
+            {"asset_id": "ov-ign", "source": "linux", "message": "service timeout code=700", "severity": "warning"},
+            {"asset_id": "ov-ign", "source": "linux", "message": "service timeout code=701", "severity": "warning"},
+            {"asset_id": "ov-ign", "source": "linux", "message": "service timeout code=702", "severity": "warning"},
+        ]
+    }
+    client.post("/ingest/events", json=payload)
+
+    resp = client.get("/ai-log-analytics/overview", params={"ignore_sources": "linux"})
+    assert resp.status_code == 200
+    data = resp.json()
+    item = next(entry for entry in data["assets"] if entry["asset_id"] == "ov-ign")
+    assert item["analyzed_events"] == 0
+
+
+def test_ai_log_policy_crud_and_apply_to_asset_endpoint() -> None:
+    create_resp = client.post(
+        "/ai-log-analytics/policies",
+        json={
+            "id": "pol-1",
+            "name": "ignore linux timeout",
+            "ignore_sources": ["linux"],
+            "ignore_signatures": [],
+            "enabled": True,
+        },
+    )
+    assert create_resp.status_code == 200
+
+    list_resp = client.get("/ai-log-analytics/policies")
+    assert list_resp.status_code == 200
+    assert any(item["id"] == "pol-1" for item in list_resp.json())
+
+    client.post("/assets", json={"id": "pol-asset", "name": "pol-asset", "asset_type": "server", "location": "R14"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "pol-asset", "source": "linux", "message": "service timeout code=901", "severity": "warning"},
+                {"asset_id": "pol-asset", "source": "linux", "message": "service timeout code=902", "severity": "warning"},
+            ]
+        },
+    )
+
+    analytics_resp = client.get("/assets/pol-asset/ai-log-analytics", params={"policy_id": "pol-1"})
+    assert analytics_resp.status_code == 200
+    payload = analytics_resp.json()
+    assert payload["analyzed_events"] == 0
+
+    del_resp = client.delete("/ai-log-analytics/policies/pol-1")
+    assert del_resp.status_code == 200
+
+
+def test_ai_log_policy_apply_to_overview() -> None:
+    client.post(
+        "/ai-log-analytics/policies",
+        json={
+            "id": "pol-over",
+            "name": "ignore linux",
+            "ignore_sources": ["linux"],
+            "ignore_signatures": [],
+            "enabled": True,
+        },
+    )
+    client.post("/assets", json={"id": "pol-over-asset", "name": "pol-over-asset", "asset_type": "server", "location": "R15"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "pol-over-asset", "source": "linux", "message": "service timeout code=950", "severity": "warning"},
+                {"asset_id": "pol-over-asset", "source": "linux", "message": "service timeout code=951", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/ai-log-analytics/overview", params={"policy_id": "pol-over"})
+    assert resp.status_code == 200
+    data = resp.json()
+    item = next(row for row in data["assets"] if row["asset_id"] == "pol-over-asset")
+    assert item["analyzed_events"] == 0
+
+
+def test_ai_log_policies_merge_union_vs_intersection() -> None:
+    client.post(
+        "/ai-log-analytics/policies",
+        json={"id": "pol-u1", "name": "ignore linux", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+    )
+    client.post(
+        "/ai-log-analytics/policies",
+        json={"id": "pol-u2", "name": "ignore windows", "ignore_sources": ["windows_eventlog"], "ignore_signatures": [], "enabled": True},
+    )
+
+    client.post("/assets", json={"id": "merge-asset", "name": "merge-asset", "asset_type": "server", "location": "R16"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "merge-asset", "source": "linux", "message": "service timeout code=991", "severity": "warning"},
+                {"asset_id": "merge-asset", "source": "windows_eventlog", "message": "EventID=4625 user=test", "severity": "warning"},
+            ]
+        },
+    )
+
+    union_resp = client.get(
+        "/assets/merge-asset/ai-log-analytics",
+        params={"policy_ids": "pol-u1,pol-u2", "policy_merge_strategy": "union", "limit": 200},
+    )
+    assert union_resp.status_code == 200
+    assert union_resp.json()["analyzed_events"] == 0
+
+    inter_resp = client.get(
+        "/assets/merge-asset/ai-log-analytics",
+        params={"policy_ids": "pol-u1,pol-u2", "policy_merge_strategy": "intersection", "limit": 200},
+    )
+    assert inter_resp.status_code == 200
+    assert inter_resp.json()["analyzed_events"] >= 2
+
+
+def test_ai_log_policy_dry_run_endpoint() -> None:
+    client.post(
+        "/ai-log-analytics/policies",
+        json={"id": "pol-dry", "name": "dry", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+    )
+    client.post("/assets", json={"id": "dry-asset", "name": "dry-asset", "asset_type": "server", "location": "R17"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "dry-asset", "source": "linux", "message": "service timeout code=801", "severity": "warning"},
+                {"asset_id": "dry-asset", "source": "linux", "message": "service timeout code=802", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/assets/dry-asset/ai-log-analytics/policy-dry-run", params={"policy_id": "pol-dry"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_events"] >= 2
+    assert data["filtered_events"] >= 2
+    assert data["remaining_events"] == 0
+    assert "linux" in data["applied_sources"]
+
+
+def test_ai_log_policy_merge_strategy_validation() -> None:
+    client.post("/assets", json={"id": "merge-val", "name": "merge-val", "asset_type": "server", "location": "R18"})
+
+    resp_asset = client.get(
+        "/assets/merge-val/ai-log-analytics",
+        params={"policy_merge_strategy": "bad_value"},
+    )
+    assert resp_asset.status_code == 422
+
+    resp_overview = client.get(
+        "/ai-log-analytics/overview",
+        params={"policy_merge_strategy": "bad_value"},
+    )
+    assert resp_overview.status_code == 422
+
+    resp_dry_run = client.get(
+        "/assets/merge-val/ai-log-analytics/policy-dry-run",
+        params={"policy_merge_strategy": "bad_value"},
+    )
+    assert resp_dry_run.status_code == 422
+
+
+def test_ai_log_policy_tenant_scope_visibility_and_usage() -> None:
+    create_resp = client.post(
+        "/ai-log-analytics/policies?tenant_id=t1",
+        json={
+            "id": "pol-tenant-1",
+            "name": "tenant t1 policy",
+            "ignore_sources": ["linux"],
+            "ignore_signatures": [],
+            "enabled": True,
+        },
+    )
+    assert create_resp.status_code == 200
+    assert create_resp.json()["tenant_id"] == "t1"
+
+    list_t1 = client.get("/ai-log-analytics/policies?tenant_id=t1")
+    assert list_t1.status_code == 200
+    assert any(item["id"] == "pol-tenant-1" for item in list_t1.json())
+
+    list_t2 = client.get("/ai-log-analytics/policies?tenant_id=t2")
+    assert list_t2.status_code == 200
+    assert all(item["id"] != "pol-tenant-1" for item in list_t2.json())
+
+    client.post("/assets", json={"id": "t2:asset", "name": "t2:asset", "asset_type": "server", "location": "t2-rack"})
+    client.post(
+        "/ingest/events",
+        json={"events": [{"asset_id": "t2:asset", "source": "linux", "message": "service timeout code=991", "severity": "warning"}]},
+    )
+
+    forbidden_policy = client.get(
+        "/assets/t2:asset/ai-log-analytics",
+        params={"tenant_id": "t2", "policy_id": "pol-tenant-1"},
+    )
+    assert forbidden_policy.status_code == 404
+
+
+def test_ai_log_policy_audit_entries() -> None:
+    create = client.post(
+        "/ai-log-analytics/policies?tenant_id=t3",
+        json={"id": "pol-audit", "name": "audit", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+    assert create.status_code == 200
+
+    delete = client.delete("/ai-log-analytics/policies/pol-audit?tenant_id=t3", headers={"X-Role": "admin"})
+    assert delete.status_code == 200
+
+    audit = client.get("/ai-log-analytics/policies/audit?tenant_id=t3&limit=10", headers={"X-Role": "admin"})
+    assert audit.status_code == 200
+    rows = audit.json()
+    assert any(row["policy_id"] == "pol-audit" and row["action"] == "upsert" for row in rows)
+    assert any(row["policy_id"] == "pol-audit" and row["action"] == "delete" for row in rows)
+
+
+def test_ai_log_policy_audit_filters_and_csv() -> None:
+    client.post(
+        "/ai-log-analytics/policies?tenant_id=t4",
+        json={"id": "pol-a1", "name": "a1", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+    client.post(
+        "/ai-log-analytics/policies?tenant_id=t4",
+        json={"id": "pol-a2", "name": "a2", "ignore_sources": ["windows_eventlog"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+    client.delete("/ai-log-analytics/policies/pol-a1?tenant_id=t4", headers={"X-Role": "admin"})
+
+    filtered = client.get(
+        "/ai-log-analytics/policies/audit",
+        params={"tenant_id": "t4", "action": "delete", "policy_id": "pol-a1", "limit": 10},
+        headers={"X-Role": "admin"},
+    )
+    assert filtered.status_code == 200
+    rows = filtered.json()
+    assert len(rows) >= 1
+    assert all(row["action"] == "delete" for row in rows)
+    assert all(row["policy_id"] == "pol-a1" for row in rows)
+
+    csv_resp = client.get(
+        "/ai-log-analytics/policies/audit.csv",
+        params={"tenant_id": "t4", "action": "upsert", "limit": 10},
+        headers={"X-Role": "admin"},
+    )
+    assert csv_resp.status_code == 200
+    assert "ts,policy_id,tenant_id,action,actor_role,details" in csv_resp.text
+    assert '"upsert"' in csv_resp.text
+
+
+def test_ai_log_policy_audit_sort_offset_and_max_ts() -> None:
+    client.post(
+        "/ai-log-analytics/policies?tenant_id=t5",
+        json={"id": "pol-s1", "name": "s1", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+    client.post(
+        "/ai-log-analytics/policies?tenant_id=t5",
+        json={"id": "pol-s2", "name": "s2", "ignore_sources": ["windows_eventlog"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+
+    rows_desc = client.get("/ai-log-analytics/policies/audit", params={"tenant_id": "t5", "sort": "desc", "limit": 10}, headers={"X-Role": "admin"}).json()
+    assert len(rows_desc) >= 2
+    newest_ts = rows_desc[0]["ts"]
+
+    rows_asc = client.get("/ai-log-analytics/policies/audit", params={"tenant_id": "t5", "sort": "asc", "limit": 10}, headers={"X-Role": "admin"}).json()
+    assert len(rows_asc) >= 2
+    assert rows_asc[0]["ts"] <= rows_asc[-1]["ts"]
+
+    rows_offset = client.get("/ai-log-analytics/policies/audit", params={"tenant_id": "t5", "sort": "desc", "limit": 1, "offset": 1}, headers={"X-Role": "admin"}).json()
+    assert len(rows_offset) == 1
+
+    rows_max_ts = client.get("/ai-log-analytics/policies/audit", params={"tenant_id": "t5", "max_ts": newest_ts, "limit": 50}, headers={"X-Role": "admin"}).json()
+    assert all(row["ts"] <= newest_ts for row in rows_max_ts)
+
+    bad_sort = client.get("/ai-log-analytics/policies/audit", params={"tenant_id": "t5", "sort": "bad"}, headers={"X-Role": "admin"})
+    assert bad_sort.status_code == 422
+
+
+def test_compliance_purge_cleans_ai_policy_audit() -> None:
+    client.post(
+        "/ai-log-analytics/policies?tenant_id=t6",
+        json={"id": "pol-purge", "name": "purge", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+        headers={"X-Role": "admin"},
+    )
+    before = client.get("/ai-log-analytics/policies/audit?tenant_id=t6&limit=20", headers={"X-Role": "admin"})
+    assert before.status_code == 200
+    assert len(before.json()) >= 1
+
+    purge = client.post(
+        "/auth/compliance/purge?audit_max_age_sec=1&worker_history_max_age_sec=1&ai_policy_audit_max_age_sec=1",
+        headers={"X-Role": "admin"},
+    )
+    assert purge.status_code == 200
+    assert purge.json()["deleted_ai_policy_audit"] >= 0

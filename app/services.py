@@ -11,7 +11,13 @@ from app.models import (
     CollectorTarget,
     CorrelationInsight,
     Event,
+    LogAnalyticsAssetSummary,
     LogAnalyticsInsight,
+    LogAnalyticsOverview,
+    LogAnalyticsPolicy,
+    LogAnalyticsPolicyAuditEntry,
+    LogAnalyticsPolicyDryRun,
+    PolicyMergeStrategy,
     LogAnomaly,
     LogCluster,
     Recommendation,
@@ -79,8 +85,55 @@ class MonitoringService:
     def delete_access_audit_older_than(self, min_ts: int) -> int:
         return self.storage.delete_access_audit_older_than(min_ts=min_ts)
 
+    def delete_ai_log_policy_audit_older_than(self, min_ts: int) -> int:
+        return self.storage.delete_ai_log_policy_audit_older_than(min_ts=min_ts)
+
     def delete_worker_history_older_than(self, min_ts_iso: str) -> int:
         return self.storage.delete_worker_history_older_than(min_ts_iso=min_ts_iso)
+
+
+
+    def add_ai_log_policy_audit(self, entry: LogAnalyticsPolicyAuditEntry) -> LogAnalyticsPolicyAuditEntry:
+        return self.storage.insert_ai_log_policy_audit(entry)
+
+    def list_ai_log_policy_audit(
+        self,
+        limit: int = 100,
+        tenant_id: str | None = None,
+        action: str | None = None,
+        policy_id: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        sort: str = "desc",
+        offset: int = 0,
+    ) -> list[LogAnalyticsPolicyAuditEntry]:
+        return self.storage.list_ai_log_policy_audit(
+            limit=limit,
+            tenant_id=tenant_id,
+            action=action,
+            policy_id=policy_id,
+            min_ts=min_ts,
+            max_ts=max_ts,
+            sort=sort,
+            offset=offset,
+        )
+
+    def upsert_ai_log_policy(self, policy: LogAnalyticsPolicy) -> LogAnalyticsPolicy:
+        return self.storage.upsert_ai_log_policy(policy)
+
+    def list_ai_log_policies(self, enabled_only: bool = False, tenant_id: str | None = None) -> list[LogAnalyticsPolicy]:
+        return self.storage.list_ai_log_policies(enabled_only=enabled_only, tenant_id=tenant_id)
+
+    def get_ai_log_policy(self, policy_id: str, tenant_id: str | None = None) -> LogAnalyticsPolicy:
+        policy = self.storage.get_ai_log_policy(policy_id, tenant_id=tenant_id)
+        if policy is None:
+            raise KeyError(f"Unknown ai-log policy '{policy_id}'")
+        return policy
+
+    def delete_ai_log_policy(self, policy_id: str, tenant_id: str | None = None) -> None:
+        deleted = self.storage.delete_ai_log_policy(policy_id, tenant_id=tenant_id)
+        if deleted == 0:
+            raise KeyError(f"Unknown ai-log policy '{policy_id}'")
 
     def register_event(self, event: Event) -> tuple[Event, bool]:
         if not self.storage.asset_exists(event.asset_id):
@@ -128,6 +181,95 @@ class MonitoringService:
         source_part = re.sub(r"[^a-z0-9]", "", source.lower())[:6] or "src"
         hash_part = hashlib.sha1(f"{source}|{signature}".encode("utf-8")).hexdigest()[:8]
         return f"cl-{source_part}-{hash_part}"
+
+
+    def resolve_ai_log_filters(
+        self,
+        ignore_sources: set[str] | None = None,
+        ignore_signatures: set[str] | None = None,
+        policy_id: str | None = None,
+        policy_ids: list[str] | None = None,
+        merge_strategy: PolicyMergeStrategy | str = PolicyMergeStrategy.union,
+        tenant_id: str | None = None,
+    ) -> tuple[set[str], set[str]]:
+        merged_sources = set(ignore_sources or set())
+        merged_signatures = set(ignore_signatures or set())
+
+        selected_policy_ids: list[str] = []
+        if policy_id:
+            selected_policy_ids.append(policy_id)
+        if policy_ids:
+            selected_policy_ids.extend([item for item in policy_ids if item])
+
+        policies: list[LogAnalyticsPolicy] = []
+        for pid in selected_policy_ids:
+            policy = self.get_ai_log_policy(pid, tenant_id=tenant_id)
+            if policy.enabled:
+                policies.append(policy)
+
+        if policies:
+            strategy = merge_strategy.value if isinstance(merge_strategy, PolicyMergeStrategy) else str(merge_strategy).strip().lower()
+            if strategy not in {"union", "intersection"}:
+                raise ValueError("Unknown merge_strategy. Allowed values: union, intersection")
+
+            if strategy == "union":
+                policy_sources: set[str] = set()
+                policy_signatures: set[str] = set()
+                for policy in policies:
+                    policy_sources.update(policy.ignore_sources)
+                    policy_signatures.update(policy.ignore_signatures)
+            else:
+                policy_sources = set(policies[0].ignore_sources)
+                policy_signatures = set(policies[0].ignore_signatures)
+                for policy in policies[1:]:
+                    policy_sources.intersection_update(policy.ignore_sources)
+                    policy_signatures.intersection_update(policy.ignore_signatures)
+
+            merged_sources.update(policy_sources)
+            merged_signatures.update(policy_signatures)
+
+        return merged_sources, merged_signatures
+
+
+    def preview_ai_log_policy_effect(
+        self,
+        asset_id: str,
+        ignore_sources: set[str] | None = None,
+        ignore_signatures: set[str] | None = None,
+        policy_id: str | None = None,
+        policy_ids: list[str] | None = None,
+        merge_strategy: PolicyMergeStrategy | str = PolicyMergeStrategy.union,
+        limit: int = 300,
+        tenant_id: str | None = None,
+    ) -> LogAnalyticsPolicyDryRun:
+        if not self.storage.asset_exists(asset_id):
+            raise KeyError(f"Unknown asset '{asset_id}'")
+
+        resolved_sources, resolved_signatures = self.resolve_ai_log_filters(
+            ignore_sources=ignore_sources,
+            ignore_signatures=ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=policy_ids,
+            merge_strategy=merge_strategy,
+            tenant_id=tenant_id,
+        )
+
+        events = list(reversed(self.list_events(asset_id, limit=limit)))
+        filtered = 0
+        for event in events:
+            signature = self._message_signature(event.message)
+            if event.source.lower() in resolved_sources or signature in resolved_signatures:
+                filtered += 1
+
+        total = len(events)
+        return LogAnalyticsPolicyDryRun(
+            asset_id=asset_id,
+            total_events=total,
+            filtered_events=filtered,
+            remaining_events=max(0, total - filtered),
+            applied_sources=sorted(resolved_sources),
+            applied_signatures=sorted(resolved_signatures),
+        )
 
     def build_log_analytics(
         self,
@@ -432,6 +574,69 @@ class MonitoringService:
         )
 
         return Recommendation(asset_id=asset_id, risk_score=round(risk, 2), summary=summary, actions=actions)
+
+    def build_log_analytics_overview(
+        self,
+        limit_per_asset: int = 300,
+        max_assets: int = 50,
+        max_clusters: int = 30,
+        max_anomalies: int = 20,
+        ignore_sources: set[str] | None = None,
+        ignore_signatures: set[str] | None = None,
+        asset_ids: set[str] | None = None,
+    ) -> LogAnalyticsOverview:
+        all_assets = self.list_assets()
+        if asset_ids is not None:
+            all_assets = [asset for asset in all_assets if asset.id in asset_ids]
+        assets = all_assets[:max_assets]
+        summaries: list[LogAnalyticsAssetSummary] = []
+        by_kind: Counter[str] = Counter()
+        by_severity: Counter[str] = Counter()
+
+        for asset in assets:
+            insight = self.build_log_analytics(
+                asset.id,
+                limit=limit_per_asset,
+                max_clusters=max_clusters,
+                max_anomalies=max_anomalies,
+                ignore_sources=ignore_sources,
+                ignore_signatures=ignore_signatures,
+            )
+            top_severity = insight.anomalies[0].severity if insight.anomalies else None
+            top_reason = insight.anomalies[0].reason if insight.anomalies else None
+            summaries.append(
+                LogAnalyticsAssetSummary(
+                    asset_id=asset.id,
+                    analyzed_events=insight.analyzed_events,
+                    anomalies_total=len(insight.anomalies),
+                    top_severity=top_severity,
+                    top_reason=top_reason,
+                )
+            )
+            for anomaly in insight.anomalies:
+                by_kind[anomaly.kind] += 1
+                by_severity[anomaly.severity.value] += 1
+
+        summaries.sort(
+            key=lambda item: (
+                item.anomalies_total,
+                2 if item.top_severity == Severity.critical else 1 if item.top_severity == Severity.warning else 0,
+                item.analyzed_events,
+            ),
+            reverse=True,
+        )
+
+        assets_with_anomalies = sum(1 for item in summaries if item.anomalies_total > 0)
+        total_anomalies = sum(item.anomalies_total for item in summaries)
+
+        return LogAnalyticsOverview(
+            assets_considered=len(summaries),
+            assets_with_anomalies=assets_with_anomalies,
+            total_anomalies=total_anomalies,
+            by_kind=dict(by_kind),
+            by_severity=dict(by_severity),
+            assets=summaries,
+        )
 
     def overview(self) -> dict[str, int]:
         assets = self.list_assets()
