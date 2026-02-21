@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from collections import Counter
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException
@@ -750,36 +751,161 @@ def ui_diagnostics(
 def dashboard() -> str:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
+
+    assets = service.list_assets()
+    asset_event_counts: dict[str, int] = {}
+    all_events = []
+    for asset in assets:
+        events = service.list_events(asset.id)
+        asset_event_counts[asset.id] = len(events)
+        all_events.extend(events)
+
+    source_counts = Counter(e.source for e in all_events)
+    severity_counts = Counter(e.severity.value for e in all_events)
+    total_events = max(len(all_events), 1)
+
+    windows_events = source_counts.get("windows_eventlog", 0)
+    syslog_events = source_counts.get("syslog", 0)
+    agentless_events = sum(v for k, v in source_counts.items() if k.startswith("agentless_"))
+
+    trend_counts: Counter[str] = Counter()
+    for e in all_events:
+        month = str(e.timestamp)[:7]
+        trend_counts[month] += 1
+    trend_labels = sorted(trend_counts.keys())[-6:]
+    trend_values = [trend_counts[m] for m in trend_labels]
+
+    def _polyline(values: list[int]) -> str:
+        if not values:
+            return ""
+        max_val = max(values) or 1
+        points = []
+        for i, v in enumerate(values):
+            x = 20 + (i * 90)
+            y = 140 - int((v / max_val) * 110)
+            points.append(f"{x},{y}")
+        return " ".join(points)
+
+    top_assets = sorted(asset_event_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    top_rows = "".join(
+        f"<tr><td>{aid}</td><td>{cnt}</td></tr>" for aid, cnt in top_assets
+    ) or "<tr><td colspan='2'>No data</td></tr>"
+
+    recent_alert_candidates = [
+        e for e in sorted(all_events, key=lambda x: str(x.timestamp), reverse=True)
+        if e.severity.value in ("warning", "critical")
+    ][:7]
+    recent_alerts_html = "".join(
+        f"<div class='alert-item {e.severity.value}'><div class='alert-title'>{e.source}: {e.message[:110]}</div><div class='alert-ts'>{e.timestamp}</div></div>"
+        for e in recent_alert_candidates
+    ) or "<div class='muted'>No warning/critical events yet.</div>"
+
+    severity_rows = "".join(
+        f"<tr><td>{level.title()}</td><td>{severity_counts.get(level, 0)}</td></tr>"
+        for level in ["info", "warning", "critical"]
+    )
+
     rows = []
-    for asset in service.list_assets():
+    for asset in assets:
         alerts_count = len(service.build_alerts(asset.id))
         insights_count = len(service.build_correlation_insights(asset.id))
-        events_count = len(service.list_events(asset.id))
+        events_count = asset_event_counts.get(asset.id, 0)
         rows.append(
             f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
             f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
         )
-
     rows_html = "".join(rows) if rows else "<tr><td colspan='6'>No assets yet</td></tr>"
+
+    win_pct = int((windows_events / total_events) * 100)
+    syslog_pct = int((syslog_events / total_events) * 100)
+    ag_pct = int((agentless_events / total_events) * 100)
+    trend_poly = _polyline(trend_values)
+    trend_points = "".join(
+        f"<text x='{20 + i * 90}' y='158' font-size='10' fill='#667'>{label[2:]}</text>" for i, label in enumerate(trend_labels)
+    )
+
     return f"""
-    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
-      <h1>InfraMind Dashboard</h1>
-      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a> | <a href='/ui/diagnostics'>Worker diagnostics</a></p>
-      <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
-      Critical assets: <b>{overview_data['critical_assets']}</b></p>
-      <div style='padding: 12px; border: 1px solid #ccc; margin: 12px 0; background: #f9f9f9;'>
-        <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'}
-        | enabled: {worker_health_data['enabled']}
-        | tracked: {worker_health_data['tracked']}
-        | failed: {worker_health_data['failed']}
-        | stale: {worker_health_data['stale']}
-        | cycles: {worker_health_data['cycle_count']}
-        | <a href='/worker/health'>JSON</a>
+    <html><head><style>
+      body {{ font-family: Inter, Arial, sans-serif; margin:0; background:#f3f5f7; color:#1f2937; }}
+      .topbar {{ background:#344452; color:#fff; padding:14px 24px; display:flex; justify-content:space-between; align-items:center; }}
+      .nav a {{ color:#dce6ee; margin-right:14px; text-decoration:none; font-size:14px; }}
+      .container {{ max-width:1400px; margin:18px auto; padding:0 16px; }}
+      .cards {{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:14px; }}
+      .card {{ background:#fff; border:1px solid #d8dee4; border-radius:10px; padding:16px; box-shadow:0 1px 2px rgba(0,0,0,.04); }}
+      .metric {{ font-size:34px; font-weight:700; margin-top:8px; }}
+      .muted {{ color:#64748b; font-size:13px; }}
+      .ring {{ width:72px; height:72px; border-radius:50%; margin-left:auto; }}
+      .grid {{ display:grid; grid-template-columns:1.2fr 1.2fr 1fr; gap:14px; }}
+      .panel {{ background:#fff; border:1px solid #d8dee4; border-radius:10px; padding:16px; }}
+      h2 {{ margin:0 0 10px 0; font-size:24px; }}
+      h3 {{ margin:0 0 12px 0; font-size:28px; }}
+      table {{ width:100%; border-collapse:collapse; }}
+      th,td {{ border-bottom:1px solid #edf2f7; text-align:left; padding:8px; font-size:13px; }}
+      .alert-item {{ border-left:4px solid #94a3b8; background:#f8fafc; padding:8px 10px; margin-bottom:8px; }}
+      .alert-item.warning {{ border-left-color:#f59e0b; }}
+      .alert-item.critical {{ border-left-color:#dc2626; }}
+      .alert-title {{ font-size:14px; }}
+      .alert-ts {{ font-size:12px; color:#64748b; margin-top:4px; }}
+      .health {{ margin:10px 0 14px; padding:10px 12px; background:#fff; border:1px solid #d8dee4; border-radius:8px; }}
+      .small {{ font-size:12px; color:#64748b; }}
+    </style></head>
+    <body>
+      <div class='topbar'>
+        <div><b>InfraMind Monitor</b></div>
+        <div class='nav'>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/collectors'>Collectors</a><a href='/ui/diagnostics'>Diagnostics</a>
+        </div>
       </div>
-      <table border='1' cellpadding='8' cellspacing='0'>
-        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>
+      <div class='container'>
+        <h2>Events Overview</h2>
+        <div class='cards'>
+          <div class='card'><div class='muted'>All Events</div><div class='metric'>{overview_data['events_total']}</div><div class='small'>Across {overview_data['assets_total']} assets</div></div>
+          <div class='card'><div class='muted'>Windows Events</div><div class='metric'>{windows_events}</div><div class='small'>{win_pct}% of all events</div></div>
+          <div class='card'><div class='muted'>Syslog Events</div><div class='metric'>{syslog_events}</div><div class='small'>{syslog_pct}% of all events</div></div>
+          <div class='card' style='display:flex;align-items:center;gap:8px'><div><div class='muted'>Agentless Events</div><div class='metric' style='font-size:30px'>{agentless_events}</div><div class='small'>{ag_pct}% of all events</div></div><div class='ring' style='background:conic-gradient(#0ea5e9 {ag_pct}%, #e2e8f0 0)'></div></div>
+        </div>
+
+        <div class='health'>
+          <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} |
+          enabled: {worker_health_data['enabled']} | tracked: {worker_health_data['tracked']} |
+          failed: {worker_health_data['failed']} | stale: {worker_health_data['stale']} |
+          cycles: {worker_health_data['cycle_count']} | <a href='/worker/health'>JSON</a>
+        </div>
+
+        <div class='grid'>
+          <div class='panel'>
+            <h3>Logs Trend</h3>
+            <svg width='560' height='170' style='max-width:100%;background:#fff'>
+              <line x1='20' y1='140' x2='540' y2='140' stroke='#cbd5e1' stroke-width='1' />
+              <polyline points='{trend_poly}' fill='rgba(14,165,233,0.15)' stroke='#0ea5e9' stroke-width='3' />
+              {trend_points}
+            </svg>
+          </div>
+          <div class='panel'>
+            <h3>Top 5 Assets</h3>
+            <table>
+              <thead><tr><th>Asset</th><th>Events</th></tr></thead>
+              <tbody>{top_rows}</tbody>
+            </table>
+            <div style='margin-top:16px'>
+              <div class='muted'>Severity Distribution</div>
+              <table><tbody>{severity_rows}</tbody></table>
+            </div>
+          </div>
+          <div class='panel'>
+            <h3>Recent Alerts</h3>
+            {recent_alerts_html}
+          </div>
+        </div>
+
+        <div class='panel' style='margin-top:14px'>
+          <h3 style='font-size:20px'>Assets table</h3>
+          <table>
+            <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </div>
+      </div>
     </body></html>
     """
 

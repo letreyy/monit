@@ -419,6 +419,9 @@ def test_worker_health_endpoint() -> None:
 def test_dashboard_includes_worker_health_widget() -> None:
     resp = client.get("/dashboard")
     assert resp.status_code == 200
+    assert "Events Overview" in resp.text
+    assert "Logs Trend" in resp.text
+    assert "Recent Alerts" in resp.text
     assert "Worker health:" in resp.text
     assert "/worker/health" in resp.text
 

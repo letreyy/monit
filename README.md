@@ -659,3 +659,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: выделить diagnostics UI в более структурированный фронтенд-компонент (с отдельным JS-модулем и переиспользуемыми функциями рендера), чтобы упростить развитие визуализации и дальнейшие real-time виджеты.
+
+## Следующий шаг (реализовано): визуальный dashboard refresh (операторский UI)
+
+Сделали следующий шаг roadmap по UI:
+
+- переработан `GET /dashboard` в более «операторский» вид (карточки KPI, logs trend, top assets, recent alerts);
+- добавлены агрегаты по источникам (`windows_eventlog`, `syslog`, `agentless_*`) и распределение по severity;
+- сохранены быстрые переходы в workflow (`/ui/assets`, `/ui/events`, `/ui/collectors`, `/ui/diagnostics`) и виджет состояния worker.
+
+### Что дальше по плану
+
+Следующий шаг: вынести dashboard/diagnostics фронтенд-логику в отдельный JS-модуль + API-first контракты для графиков (подготовка к более богатым интерактивным компонентам и RBAC/UI-ролям).
