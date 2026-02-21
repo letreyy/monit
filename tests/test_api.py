@@ -525,6 +525,38 @@ def test_worker_history_summary_endpoint() -> None:
     assert any(row["collector_type"] == "ssh" for row in payload["by_collector_type"])
 
 
+def test_worker_history_summary_endpoint() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-sum", "name": "srv-sum", "asset_type": "server", "location": "R9"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-sum",
+            "name": "Summary target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-sum",
+        },
+    )
+
+    client.post("/worker/run-once")
+    resp = client.get("/worker/history/summary?target_id=col-sum&collector_type=ssh")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "summary" in payload
+    assert "by_collector_type" in payload
+    assert "trend" in payload
+    assert payload["summary"]["runs"] >= 1
+    assert any(row["collector_type"] == "ssh" for row in payload["by_collector_type"])
+
+
 def test_worker_history_persists_in_storage() -> None:
     db_path = Path("data/test_history.db")
     if db_path.exists():
