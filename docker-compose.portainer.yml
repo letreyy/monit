@@ -34,6 +34,7 @@ services:
       AUTH_JWT_LEEWAY_SEC: "30"
       AUTH_ROLE_SCOPES_MAP: "monitor.admin:admin,monitor.write:operator,monitor.read:viewer"
       AUTH_ROLE_GROUPS_MAP: "admins:admin,operators:operator,viewers:viewer"
+      AUTH_TENANT_HEADER_NAME: "X-Tenant"
     volumes:
       - inframind_data:/app/data
 

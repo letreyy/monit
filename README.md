@@ -255,7 +255,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
   - HS256 JWT,
   - RS256 JWT через JWKS,
   - OIDC discovery (`jwks_uri` из `.well-known/openid-configuration`).
-- Поддержаны claim-to-role mapping (`role`/`scope`/`groups`) и reject telemetry по JWT.
+- Поддержаны claim-to-role mapping (`role`/`scope`/`groups`), reject telemetry по JWT и read-side tenant scoping для ключевых API.
 
 ### 6) Ops & Compliance
 - Персистентный access-audit (allow/deny policy decisions).
@@ -265,5 +265,5 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 
 ## Что дальше (укрупнённо)
 1. **OIDC enterprise hardening**: policy packs по issuer/client (azp/scp/groups), richer reject analytics.
-2. **Read-side RBAC scoping**: role/tenant scoped filtering для dashboard/diagnostics/assets.
-3. **Compliance automation**: scheduled reports, webhook/email routing, retention/purge policies.
+2. **Compliance automation**: scheduled reports, webhook/email routing, retention/purge policies.
+3. **AI log analytics**: anomaly detection/clusterization + explainable insights поверх текущих rule/correlation механизмов.

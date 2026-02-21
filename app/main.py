@@ -60,6 +60,7 @@ AUTH_JWKS_CACHE_TTL_SEC = int(os.getenv("AUTH_JWKS_CACHE_TTL_SEC", "300"))
 AUTH_JWT_LEEWAY_SEC = int(os.getenv("AUTH_JWT_LEEWAY_SEC", "30"))
 AUTH_ROLE_SCOPES_MAP = os.getenv("AUTH_ROLE_SCOPES_MAP", "monitor.admin:admin,monitor.write:operator,monitor.read:viewer")
 AUTH_ROLE_GROUPS_MAP = os.getenv("AUTH_ROLE_GROUPS_MAP", "admins:admin,operators:operator,viewers:viewer")
+AUTH_TENANT_HEADER_NAME = os.getenv("AUTH_TENANT_HEADER_NAME", "X-Tenant")
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -391,6 +392,7 @@ AUTH_USER_MAP = _load_auth_users()
 class AuthContext:
     role: str
     source: str
+    tenant_id: str | None = None
 
 
 @asynccontextmanager
@@ -836,6 +838,47 @@ def _parse_has_error_filter(has_error: str | None) -> bool | None:
     return None
 
 
+
+
+def _normalize_tenant_id(value: str | None) -> str | None:
+    if not value:
+        return None
+    v = str(value).strip()
+    if not v:
+        return None
+    return v
+
+
+def _resolve_tenant_scope(request: Request, tenant_hint: str | None = None) -> str | None:
+    header_tenant = _normalize_tenant_id(request.headers.get(AUTH_TENANT_HEADER_NAME, ""))
+    if header_tenant:
+        return header_tenant
+    return _normalize_tenant_id(tenant_hint)
+
+
+def _asset_in_tenant(asset_id: str, tenant_id: str | None) -> bool:
+    if not tenant_id:
+        return True
+    return asset_id.startswith(f"{tenant_id}:")
+
+
+def _tenant_target_ids(tenant_id: str | None) -> set[str]:
+    if not tenant_id:
+        return set()
+    ids = set()
+    for t in service.list_collector_targets():
+        if _asset_in_tenant(t.asset_id, tenant_id):
+            ids.add(t.id)
+    return ids
+
+
+def _filter_history_by_tenant(rows: list[dict], tenant_id: str | None) -> list[dict]:
+    if not tenant_id:
+        return rows
+    allowed = _tenant_target_ids(tenant_id)
+    return [r for r in rows if str(r.get("target_id", "")) in allowed]
+
+
 def _normalize_role(role: str | None) -> str:
     if role in {"viewer", "operator", "admin"}:
         return str(role)
@@ -860,32 +903,32 @@ def _resolve_auth_context_from_request(
         token = authz.split(" ", 1)[1].strip()
         jwt_rs_role = _parse_jwt_rs256_role(token)
         if jwt_rs_role:
-            return AuthContext(role=jwt_rs_role, source="jwt_rs256")
+            return AuthContext(role=jwt_rs_role, source="jwt_rs256", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
         jwt_role = _parse_jwt_hs256_role(token)
         if jwt_role:
-            return AuthContext(role=jwt_role, source="jwt_hs256")
+            return AuthContext(role=jwt_role, source="jwt_hs256", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
         parsed_role = _parse_bearer_token(token)
         if parsed_role:
-            return AuthContext(role=parsed_role, source="bearer_signed")
+            return AuthContext(role=parsed_role, source="bearer_signed", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
         if token in AUTH_TOKEN_ROLE_MAP:
-            return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="bearer_static")
+            return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="bearer_static", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
     token = request.headers.get("X-Auth-Token", "").strip()
     if token and token in AUTH_TOKEN_ROLE_MAP:
-        return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="header_token")
+        return AuthContext(role=_normalize_role(AUTH_TOKEN_ROLE_MAP[token]), source="header_token", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
     header_role = request.headers.get("X-Role", "").strip()
     if header_role:
-        return AuthContext(role=_normalize_role(header_role), source="header_role")
+        return AuthContext(role=_normalize_role(header_role), source="header_role", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
     session_role = _parse_session_value(request.cookies.get(SESSION_COOKIE_NAME))
     if session_role:
-        return AuthContext(role=session_role, source="session")
+        return AuthContext(role=session_role, source="session", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
     if ALLOW_QUERY_ROLE and role_hint:
-        return AuthContext(role=_normalize_role(role_hint), source="query_role")
+        return AuthContext(role=_normalize_role(role_hint), source="query_role", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
-    return AuthContext(role=_normalize_role(default_role), source="default")
+    return AuthContext(role=_normalize_role(default_role), source="default", tenant_id=_resolve_tenant_scope(request, tenant_hint=None))
 
 
 def _resolve_role_from_request(
@@ -1111,14 +1154,17 @@ def worker_history(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: bool | None = None,
+    tenant_id: str | None = None,
     _role: str = Depends(require_worker_history_read),
 ) -> list[dict]:
-    return worker.history(
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    rows = worker.history(
         limit=limit,
         target_id=target_id,
         collector_type=collector_type,
         has_error=has_error,
     )
+    return _filter_history_by_tenant(rows, tenant_scope)
 
 
 @app.get("/worker/history.csv", response_class=PlainTextResponse)
@@ -1128,14 +1174,17 @@ def worker_history_csv(
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
+    tenant_id: str | None = None,
     _role: str = Depends(require_worker_history_export),
 ) -> str:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
     rows = worker.history(
         limit=limit,
         target_id=target_id,
         collector_type=collector_type,
         has_error=has_error,
     )
+    rows = _filter_history_by_tenant(rows, tenant_scope)
     header = "ts,target_id,collector_type,accepted_events,failure_streak,last_cursor,last_error"
 
     def esc(v: str) -> str:
@@ -1166,17 +1215,20 @@ def worker_diagnostics_summary(
     collector_type: str | None = None,
     has_error: str | None = None,
     role: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
     role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
 
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
     history = worker.history(
         limit=history_limit,
         target_id=target_id,
         collector_type=collector_type,
         has_error=has_error_value,
     )
+    history = _filter_history_by_tenant(history, tenant_scope)
     return _build_diagnostics_summary(history)
 
 
@@ -1188,10 +1240,12 @@ def worker_diagnostics_trend(
     collector_type: str | None = None,
     has_error: str | None = None,
     role: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
     role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
 
     history = worker.history(
         limit=history_limit,
@@ -1199,6 +1253,7 @@ def worker_diagnostics_trend(
         collector_type=collector_type,
         has_error=has_error_value,
     )
+    history = _filter_history_by_tenant(history, tenant_scope)
     return _build_diagnostics_trend(history)
 
 
@@ -1212,10 +1267,12 @@ async def worker_diagnostics_stream(
     tick_sec: float = 3.0,
     max_events: int | None = None,
     role: str | None = None,
+    tenant_id: str | None = None,
 ) -> StreamingResponse:
     has_error_value = _parse_has_error_filter(has_error)
     role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
 
     async def event_stream():
         sent = 0
@@ -1226,6 +1283,7 @@ async def worker_diagnostics_stream(
                 collector_type=collector_type,
                 has_error=has_error_value,
             )
+            history = _filter_history_by_tenant(history, tenant_scope)
             payload = {
                 "summary": _build_diagnostics_summary(history),
                 "trend": _build_diagnostics_trend(history),
@@ -1421,13 +1479,14 @@ def _build_dashboard_payload(
     asset_id: str | None = None,
     source: str | None = None,
     role: str = "viewer",
+    tenant_id: str | None = None,
 ) -> dict:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
     role_value = role if role in {"viewer", "operator", "admin"} else "viewer"
     permissions = _dashboard_permissions(role_value)
 
-    assets = service.list_assets()
+    assets = [a for a in service.list_assets() if _asset_in_tenant(a.id, tenant_id)]
     asset_event_counts: dict[str, int] = {}
     all_events = []
     for asset in assets:
@@ -1511,7 +1570,7 @@ def _build_dashboard_payload(
         "top_assets": top_assets,
         "recent_alerts": recent_alerts,
         "assets_table": assets_rows,
-        "filters": {"period_days": period_days, "asset_id": asset_id or "", "source": source or ""},
+        "filters": {"period_days": period_days, "asset_id": asset_id or "", "source": source or "", "tenant_id": tenant_id or ""},
         "filter_options": {
             "assets": [{"id": a.id, "name": a.name} for a in assets],
             "sources": sorted({e.source for e in all_events}),
@@ -1529,13 +1588,16 @@ def dashboard_data(
     asset_id: str = "",
     source: str = "",
     role: str | None = None,
+    tenant_id: str = "",
 ) -> dict:
     role_value = _resolve_role_from_request(request, role, default_role="viewer")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id.strip() or None)
     return _build_dashboard_payload(
         period_days=period_days,
         asset_id=asset_id.strip() or None,
         source=source.strip() or None,
         role=role_value,
+        tenant_id=tenant_scope,
     )
 
 
@@ -1546,13 +1608,16 @@ def dashboard(
     asset_id: str = "",
     source: str = "",
     role: str | None = None,
+    tenant_id: str = "",
 ) -> str:
     role_value = _resolve_role_from_request(request, role, default_role="viewer")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id.strip() or None)
     payload = _build_dashboard_payload(
         period_days=period_days,
         asset_id=asset_id.strip() or None,
         source=source.strip() or None,
         role=role_value,
+        tenant_id=tenant_scope,
     )
     pjson = json.dumps(payload)
     return f"""
@@ -1587,7 +1652,7 @@ def dashboard(
           <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a>
         </div>
       </div>
-      <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}'>
+      <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>
         <h2>Events Overview</h2>
         <form id='dashboard-filters' style='display:flex;gap:8px;align-items:center;margin:8px 0 14px'>
           <label>Period
@@ -1664,8 +1729,9 @@ def overview() -> Overview:
 
 
 @app.get("/assets", response_model=list[Asset])
-def list_assets() -> list[Asset]:
-    return service.list_assets()
+def list_assets(request: Request, tenant_id: str | None = None) -> list[Asset]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    return [a for a in service.list_assets() if _asset_in_tenant(a.id, tenant_scope)]
 
 
 @app.post("/assets", response_model=Asset)
@@ -1730,28 +1796,40 @@ def register_events_batch(request: Request, batch: EventBatch, _role: str = Depe
 
 
 @app.get("/assets/{asset_id}/events", response_model=list[Event])
-def list_events(asset_id: str) -> list[Event]:
+def list_events(request: Request, asset_id: str, tenant_id: str | None = None) -> list[Event]:
     if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.list_events(asset_id)
 
 
 @app.get("/assets/{asset_id}/alerts", response_model=list[Alert])
-def list_alerts(asset_id: str) -> list[Alert]:
+def list_alerts(request: Request, asset_id: str, tenant_id: str | None = None) -> list[Alert]:
     if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.build_alerts(asset_id)
 
 
 @app.get("/assets/{asset_id}/insights", response_model=list[CorrelationInsight])
-def list_insights(asset_id: str) -> list[CorrelationInsight]:
+def list_insights(request: Request, asset_id: str, tenant_id: str | None = None) -> list[CorrelationInsight]:
     if not _asset_exists(asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.build_correlation_insights(asset_id)
 
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
-def get_recommendation(asset_id: str) -> Recommendation:
+def get_recommendation(request: Request, asset_id: str, tenant_id: str | None = None) -> Recommendation:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     try:
         return service.build_recommendation(asset_id)
     except KeyError as exc:

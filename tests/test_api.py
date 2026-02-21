@@ -529,6 +529,44 @@ def test_dashboard_data_filters() -> None:
 
 
 
+
+
+def test_assets_and_dashboard_tenant_scope() -> None:
+    client.post("/assets", json={"id": "t1:srv-a", "name": "a", "asset_type": "server", "location": "R1"}, headers={"X-Role": "operator"})
+    client.post("/assets", json={"id": "t2:srv-b", "name": "b", "asset_type": "server", "location": "R2"}, headers={"X-Role": "operator"})
+
+    assets_t1 = client.get("/assets", headers={"X-Tenant": "t1"})
+    assert assets_t1.status_code == 200
+    ids = [a["id"] for a in assets_t1.json()]
+    assert "t1:srv-a" in ids
+    assert "t2:srv-b" not in ids
+
+    dash = client.get("/dashboard/data", headers={"X-Tenant": "t1"}).json()
+    assert dash["filters"]["tenant_id"] == "t1"
+
+
+def test_asset_read_endpoint_forbidden_outside_tenant_scope() -> None:
+    client.post("/assets", json={"id": "t1:srv-r", "name": "r", "asset_type": "server", "location": "R3"}, headers={"X-Role": "operator"})
+    client.post("/events", json={"asset_id": "t1:srv-r", "source": "syslog", "message": "m", "severity": "info"}, headers={"X-Role": "operator"})
+
+    denied = client.get("/assets/t1:srv-r/events", headers={"X-Tenant": "t2"})
+    assert denied.status_code == 403
+
+
+def test_worker_history_tenant_scope_filters_targets() -> None:
+    client.post("/assets", json={"id": "t1:srv-wh", "name": "wh", "asset_type": "server", "location": "R1"}, headers={"X-Role": "operator"})
+    client.post("/assets", json={"id": "t2:srv-wh", "name": "wh2", "asset_type": "server", "location": "R1"}, headers={"X-Role": "operator"})
+
+    for tid, aid in [("t1:col-wh", "t1:srv-wh"), ("t2:col-wh", "t2:srv-wh")]:
+        client.post("/collectors", headers={"X-Role": "operator"}, json={
+            "id": tid, "name": tid, "address": "127.0.0.1", "collector_type": "ssh", "port": 1,
+            "username": "u", "password": "p", "poll_interval_sec": 10, "enabled": True, "asset_id": aid,
+        })
+    client.post("/worker/run-once", headers={"X-Role": "operator"})
+
+    rows = client.get("/worker/history", headers={"X-Role": "operator", "X-Tenant": "t1"}).json()
+    assert all(r["target_id"].startswith("t1:") for r in rows)
+
 def test_dashboard_data_role_permissions() -> None:
     viewer = client.get("/dashboard/data", headers={"X-Role": "viewer"}).json()
     operator = client.get("/dashboard/data", headers={"X-Role": "operator"}).json()
