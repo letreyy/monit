@@ -724,3 +724,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: ввести реальную аутентификацию (не query-параметр role), выдачу роли из auth-контекста и применить те же server-side policy-check'и к остальным чувствительным API (collectors/events ingestion/admin actions).
+
+## Следующий шаг (реализовано): auth-context роль + RBAC policy checks
+
+Сделали более крупный шаг:
+
+- добавлен endpoint `GET /auth/whoami` для проверки разрешённой роли из auth-контекста;
+- роль теперь может приходить из заголовков (`X-Auth-Token`/`X-Role`) и применяется в dashboard/diagnostics/worker policy-checks;
+- сохранён мягкий fallback на query role (для обратной совместимости), но основная модель — auth-context роль;
+- server-side ограничения для чувствительных worker endpoint'ов работают как через query role, так и через role из заголовков.
+
+### Что дальше по плану
+
+Следующий шаг: убрать query-role fallback из production режима, подключить полноценную аутентификацию (JWT/session), централизовать policy middleware и закрыть этой моделью collectors/events ingestion/admin actions.

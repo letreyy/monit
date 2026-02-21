@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from collections import Counter
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
@@ -33,6 +33,22 @@ WORKER_TICK_SEC = float(os.getenv("WORKER_TICK_SEC", "2"))
 WORKER_TIMEOUT_SEC = float(os.getenv("WORKER_TIMEOUT_SEC", "2"))
 worker = AgentlessWorker(service, tick_sec=WORKER_TICK_SEC, timeout_sec=WORKER_TIMEOUT_SEC)
 ENABLE_AGENTLESS_WORKER = os.getenv("ENABLE_AGENTLESS_WORKER", "1") == "1"
+ALLOW_QUERY_ROLE = os.getenv("ALLOW_QUERY_ROLE", "1") == "1"
+
+
+def _load_auth_token_roles() -> dict[str, str]:
+    raw = os.getenv("AUTH_TOKENS", "")
+    mapping: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        token, role = item.split(":", 1)
+        mapping[token.strip()] = role.strip()
+    return mapping
+
+
+AUTH_TOKEN_ROLE_MAP = _load_auth_token_roles()
 
 
 @asynccontextmanager
@@ -451,6 +467,35 @@ def _can_control_worker(role: str) -> bool:
     return role in {"operator", "admin"}
 
 
+def _resolve_role_from_request(
+    request: Request,
+    role_hint: str | None,
+    default_role: str,
+) -> str:
+    token = request.headers.get("X-Auth-Token", "").strip()
+    if token and token in AUTH_TOKEN_ROLE_MAP:
+        return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
+
+    header_role = request.headers.get("X-Role", "").strip()
+    if header_role:
+        return _normalize_role(header_role)
+
+    if ALLOW_QUERY_ROLE and role_hint:
+        return _normalize_role(role_hint)
+
+    return _normalize_role(default_role)
+
+
+@app.get("/auth/whoami")
+def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bool]:
+    resolved = _resolve_role_from_request(request, role, default_role="viewer")
+    return {
+        "role": resolved,
+        "has_token": bool(request.headers.get("X-Auth-Token", "").strip()),
+        "used_query_role_hint": bool(role),
+    }
+
+
 def _build_diagnostics_summary(history: list[dict]) -> dict:
     total = len(history)
     errors = sum(1 for r in history if r.get("last_error"))
@@ -498,13 +543,14 @@ def worker_health() -> dict[str, int | str | bool]:
 
 @app.get("/worker/history")
 def worker_history(
+    request: Request,
     limit: int = 100,
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: bool | None = None,
-    role: str = "admin",
+    role: str | None = None,
 ) -> list[dict]:
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="admin")
     if not _can_view_worker_history(role_value):
         raise HTTPException(status_code=403, detail="Role is not allowed to read worker history")
     return worker.history(
@@ -517,13 +563,14 @@ def worker_history(
 
 @app.get("/worker/history.csv", response_class=PlainTextResponse)
 def worker_history_csv(
+    request: Request,
     limit: int = 200,
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
-    role: str = "admin",
+    role: str | None = None,
 ) -> str:
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="admin")
     if not _can_view_worker_history(role_value):
         raise HTTPException(status_code=403, detail="Role is not allowed to export worker history")
     rows = worker.history(
@@ -556,14 +603,15 @@ def worker_history_csv(
 
 @app.get("/worker/diagnostics/summary")
 def worker_diagnostics_summary(
+    request: Request,
     limit: int = 100,
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
-    role: str = "viewer",
+    role: str | None = None,
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     history = worker.history(
@@ -577,14 +625,15 @@ def worker_diagnostics_summary(
 
 @app.get("/worker/diagnostics/trend")
 def worker_diagnostics_trend(
+    request: Request,
     limit: int = 100,
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
-    role: str = "viewer",
+    role: str | None = None,
 ) -> dict:
     has_error_value = _parse_has_error_filter(has_error)
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     history = worker.history(
@@ -598,16 +647,17 @@ def worker_diagnostics_trend(
 
 @app.get("/worker/diagnostics/stream")
 async def worker_diagnostics_stream(
+    request: Request,
     limit: int = 100,
     target_id: str | None = None,
     collector_type: str | None = None,
     has_error: str | None = None,
     tick_sec: float = 3.0,
     max_events: int | None = None,
-    role: str = "viewer",
+    role: str | None = None,
 ) -> StreamingResponse:
     has_error_value = _parse_has_error_filter(has_error)
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
     history_limit = min(limit, 40) if role_value == "viewer" else limit
 
     async def event_stream():
@@ -634,13 +684,14 @@ async def worker_diagnostics_stream(
 
 @app.get("/ui/diagnostics", response_class=HTMLResponse)
 def ui_diagnostics(
+    request: Request,
     target_id: str = "",
     collector_type: str = "",
     has_error: str = "",
-    role: str = "viewer",
+    role: str | None = None,
 ) -> str:
     has_error_value = _parse_has_error_filter(has_error)
-    role_value = _normalize_role(role)
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
 
     history: list[dict]
     if _can_view_worker_history(role_value):
@@ -915,22 +966,36 @@ def _build_dashboard_payload(
 
 
 @app.get("/dashboard/data")
-def dashboard_data(period_days: int = 30, asset_id: str = "", source: str = "", role: str = "viewer") -> dict:
+def dashboard_data(
+    request: Request,
+    period_days: int = 30,
+    asset_id: str = "",
+    source: str = "",
+    role: str | None = None,
+) -> dict:
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
     return _build_dashboard_payload(
         period_days=period_days,
         asset_id=asset_id.strip() or None,
         source=source.strip() or None,
-        role=role.strip() or "viewer",
+        role=role_value,
     )
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(period_days: int = 30, asset_id: str = "", source: str = "", role: str = "viewer") -> str:
+def dashboard(
+    request: Request,
+    period_days: int = 30,
+    asset_id: str = "",
+    source: str = "",
+    role: str | None = None,
+) -> str:
+    role_value = _resolve_role_from_request(request, role, default_role="viewer")
     payload = _build_dashboard_payload(
         period_days=period_days,
         asset_id=asset_id.strip() or None,
         source=source.strip() or None,
-        role=role.strip() or "viewer",
+        role=role_value,
     )
     pjson = json.dumps(payload)
     return f"""
@@ -1078,16 +1143,16 @@ def worker_status() -> dict:
 
 
 @app.get("/worker/targets")
-def worker_targets(role: str = "admin") -> list[dict]:
-    role_value = _normalize_role(role)
+def worker_targets(request: Request, role: str | None = None) -> list[dict]:
+    role_value = _resolve_role_from_request(request, role, default_role="admin")
     if not _can_view_worker_history(role_value):
         raise HTTPException(status_code=403, detail="Role is not allowed to read worker targets")
     return worker.target_status()
 
 
 @app.post("/worker/run-once")
-def worker_run_once(role: str = "admin") -> dict[str, int]:
-    role_value = _normalize_role(role)
+def worker_run_once(request: Request, role: str | None = None) -> dict[str, int]:
+    role_value = _resolve_role_from_request(request, role, default_role="admin")
     if not _can_control_worker(role_value):
         raise HTTPException(status_code=403, detail="Role is not allowed to run worker")
     accepted = worker.run_once()

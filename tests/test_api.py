@@ -653,6 +653,30 @@ def test_storage_migrates_events_fingerprint_column() -> None:
 
 
 
+
+
+def test_auth_whoami_with_role_header() -> None:
+    resp = client.get("/auth/whoami", headers={"X-Role": "operator"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["role"] == "operator"
+
+
+def test_worker_sensitive_endpoints_forbid_viewer_header_role() -> None:
+    headers = {"X-Role": "viewer"}
+    assert client.get("/worker/history", headers=headers).status_code == 403
+    assert client.get("/worker/history.csv", headers=headers).status_code == 403
+    assert client.get("/worker/targets", headers=headers).status_code == 403
+    assert client.post("/worker/run-once", headers=headers).status_code == 403
+
+
+def test_worker_sensitive_endpoints_allow_operator_header_role() -> None:
+    headers = {"X-Role": "operator"}
+    assert client.get("/worker/history", headers=headers).status_code == 200
+    assert client.get("/worker/history.csv", headers=headers).status_code == 200
+    assert client.get("/worker/targets", headers=headers).status_code == 200
+    assert client.post("/worker/run-once", headers=headers).status_code == 200
+
 def test_worker_sensitive_endpoints_forbid_viewer_role() -> None:
     assert client.get("/worker/history?role=viewer").status_code == 403
     assert client.get("/worker/history.csv?role=viewer").status_code == 403
