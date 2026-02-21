@@ -457,77 +457,43 @@ def _asset_exists(asset_id: str) -> bool:
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return """
-    <html><body style='font-family: Arial; max-width: 920px; margin: 2rem auto;'>
-      <h1>InfraMind Monitor</h1>
-      <ul>
-        <li><a href='/dashboard'>Dashboard</a></li>
-        <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
-        <li><a href='/ui/events'>UI: Add Event</a></li>
-        <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
-        <li><a href='/worker/status'>Worker status</a></li>
-        <li><a href='/worker/targets'>Worker targets</a></li>
-        <li><a href='/ui/diagnostics'>UI: Worker diagnostics</a></li>
-        <li><a href='/docs'>Swagger UI</a></li>
-      </ul>
-      <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
-
-      <script>
-        (function() {
-          const targetId = encodeURIComponent("{target_id}");
-          const collectorType = encodeURIComponent("{collector_type}");
-          const hasError = encodeURIComponent("{has_error}");
-          const qs = `limit=100&target_id=${targetId}&collector_type=${collectorType}&has_error=${hasError}`;
-
-          async function refreshDiagnostics() {
-            try {
-              const [sumResp, trendResp] = await Promise.all([
-                fetch(`/worker/diagnostics/summary?${qs}`),
-                fetch(`/worker/diagnostics/trend?${qs}`),
-              ]);
-              const summary = await sumResp.json();
-              const trend = await trendResp.json();
-
-              const summaryEl = document.getElementById('diag-summary');
-              summaryEl.innerHTML = `<b>Summary:</b> runs=${summary.runs}, ok=${summary.ok}, errors=${summary.errors}, accepted_events_sum=${summary.accepted_events_sum}`;
-
-              const barsEl = document.getElementById('diag-bars');
-              const byType = summary.by_type || {};
-              const keys = Object.keys(byType);
-              if (!keys.length) {
-                barsEl.innerHTML = '<i>No data for chart</i>';
-              } else {
-                let maxTotal = 1;
-                keys.forEach(k => { const t = (byType[k].ok || 0) + (byType[k].err || 0); if (t > maxTotal) maxTotal = t; });
-                barsEl.innerHTML = keys.sort().map(k => {
-                  const ok = byType[k].ok || 0;
-                  const err = byType[k].err || 0;
-                  const width = Math.floor(((ok + err) / maxTotal) * 240);
-                  const color = err ? '#d9534f' : '#5cb85c';
-                  return `<div><b>${k}</b> ok=${ok} err=${err}<div style='background:#ddd;width:240px;height:12px'><div style='background:${color};width:${width}px;height:12px'></div></div></div>`;
-                }).join('');
-              }
-
-              const trendEl = document.getElementById('diag-trend');
-              const points = (trend.points || []).map((p, i, arr) => {
-                const maxVal = Math.max(...arr.map(x => x.accepted_events), 1);
-                const x = 10 + i * 14;
-                const y = 70 - Math.floor((p.accepted_events / maxVal) * 60);
-                return `${x},${y}`;
-              });
-              if (!points.length) {
-                trendEl.innerHTML = '<i>No trend data</i>';
-              } else {
-                trendEl.innerHTML = `<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'><polyline points='${points.join(' ')}' fill='none' stroke='#337ab7' stroke-width='2' /></svg>`;
-              }
-            } catch (e) {
-              document.getElementById('diag-summary').innerHTML = '<b>Summary:</b> failed to load diagnostics';
-            }
-          }
-
-          refreshDiagnostics();
-          setInterval(refreshDiagnostics, 10000);
-        })();
-      </script>
+    <html><head>
+      <style>
+        body { font-family: Inter, Arial, sans-serif; margin:0; background:#f3f5f7; color:#1f2937; }
+        .wrap { max-width: 1100px; margin: 24px auto; padding: 0 16px; }
+        .hero { background:#fff; border:1px solid #d8dee4; border-radius:12px; padding:20px; }
+        .grid { margin-top:14px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+        .card { background:#fff; border:1px solid #d8dee4; border-radius:10px; padding:14px; }
+        a { color:#2563eb; text-decoration:none; }
+        ul { margin: 8px 0 0 20px; }
+      </style>
+    </head><body>
+      <div class='wrap'>
+        <div class='hero'>
+          <h1 style='margin:0 0 10px 0'>InfraMind Monitor</h1>
+          <p style='margin:0'>Операционная консоль для мониторинга, agentless-сбора, диагностики и AI-подсказок.</p>
+        </div>
+        <div class='grid'>
+          <div class='card'>
+            <h3 style='margin:0 0 8px 0'>Операции</h3>
+            <ul>
+              <li><a href='/dashboard'>Dashboard</a></li>
+              <li><a href='/ui/diagnostics'>UI: Worker diagnostics</a></li>
+              <li><a href='/worker/status'>Worker status</a></li>
+              <li><a href='/worker/targets'>Worker targets</a></li>
+            </ul>
+          </div>
+          <div class='card'>
+            <h3 style='margin:0 0 8px 0'>Управление</h3>
+            <ul>
+              <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
+              <li><a href='/ui/events'>UI: Add Event</a></li>
+              <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
+              <li><a href='/docs'>Swagger UI</a></li>
+            </ul>
+          </div>
+        </div>
+      </div>
     </body></html>
     """
 
@@ -549,10 +515,10 @@ def ui_collectors() -> str:
     rows_html = "".join(rows) if rows else "<tr><td colspan='9'>No collector targets yet</td></tr>"
 
     return f"""
-    <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Agentless Collector Targets</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
-      <form method='post' action='/ui/collectors'>
+      <form method='post' action='/ui/collectors' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
         <label>ID <input name='target_id' required /></label><br/><br/>
         <label>Name <input name='name' required /></label><br/><br/>
         <label>Type
@@ -596,7 +562,7 @@ def ui_collectors() -> str:
         <button type='submit'>Save collector target</button>
       </form>
       <h2>Configured targets</h2>
-      <table border='1' cellpadding='8' cellspacing='0'>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Address</th><th>User</th><th>WinRM options</th><th>Asset</th><th>Enabled</th><th>Actions</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
@@ -675,10 +641,10 @@ def ui_assets() -> str:
     rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
 
     return f"""
-    <html><body style='font-family: Arial; max-width: 980px; margin: 2rem auto;'>
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Assets</h1>
       <p><a href='/dashboard'>← Dashboard</a></p>
-      <form method='post' action='/ui/assets'>
+      <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
         <label>ID <input name='asset_id' required /></label><br/><br/>
         <label>Name <input name='name' required /></label><br/><br/>
         <label>Type
@@ -693,7 +659,7 @@ def ui_assets() -> str:
         <button type='submit'>Save asset</button>
       </form>
       <h2>Registered assets</h2>
-      <table border='1' cellpadding='8' cellspacing='0'>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
@@ -745,7 +711,7 @@ def ui_asset_detail(asset_id: str) -> str:
     actions = "".join(f"<li>{a}</li>" for a in rec.actions)
 
     return f"""
-    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Asset detail: {asset.id}</h1>
       <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a></p>
       <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
@@ -755,7 +721,7 @@ def ui_asset_detail(asset_id: str) -> str:
       <h2>Correlation insights</h2>
       <ul>{insights_rows}</ul>
       <h2>Recent events</h2>
-      <table border='1' cellpadding='8' cellspacing='0'>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>Timestamp</th><th>Source</th><th>Severity</th><th>Message</th></tr></thead>
         <tbody>{event_rows}</tbody>
       </table>
@@ -770,10 +736,10 @@ def ui_events() -> str:
         options = "<option value=''>No assets. Create one first.</option>"
 
     return f"""
-    <html><body style='font-family: Arial; max-width: 980px; margin: 2rem auto;'>
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Add Event</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
-      <form method='post' action='/ui/events'>
+      <form method='post' action='/ui/events' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
         <label>Asset
           <select name='asset_id' required>{options}</select>
         </label><br/><br/>
@@ -1329,7 +1295,7 @@ def ui_diagnostics(
     qs = f"limit=100&target_id={target_id}&collector_type={collector_type}&has_error={has_error}&role={role_value}"
 
     return f"""
-    <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Worker diagnostics</h1>
       <p class='muted'>Current role: <b>{role_value}</b>{' (raw history limited by role)' if not _can_view_worker_history(role_value) else ''}</p>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
@@ -1367,7 +1333,7 @@ def ui_diagnostics(
         <button type='submit'>Apply</button>
       </form>
       <p><a href='/worker/history.csv?target_id={target_id}&collector_type={collector_type}&has_error={has_error}&role={role_value}'>Download filtered CSV</a></p>
-      <table border='1' cellpadding='8' cellspacing='0'>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
