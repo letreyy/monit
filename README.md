@@ -737,3 +737,19 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: убрать query-role fallback из production режима, подключить полноценную аутентификацию (JWT/session), централизовать policy middleware и закрыть этой моделью collectors/events ingestion/admin actions.
+
+## Следующий шаг (реализовано): централизованный policy-check для admin/operator API
+
+Сделали ещё один крупный модульный шаг:
+
+- добавлен единый helper `_require_role(...)` с иерархией ролей (`viewer` < `operator` < `admin`);
+- server-side RBAC теперь централизованно применяется не только к worker, но и к API управления/ingest:
+  - `GET/POST/DELETE /collectors`
+  - `POST /events`
+  - `POST /ingest/events`
+  - `POST /assets`
+- добавлены тесты, подтверждающие, что `viewer` получает `403`, а `operator` может выполнять эти операции через auth-context (`X-Role`).
+
+### Что дальше по плану
+
+Следующий шаг: вынести role/policy в отдельный middleware/dependency слой (не в каждом endpoint вручную), добавить JWT/session auth provider и переключить production на `ALLOW_QUERY_ROLE=0` по умолчанию.

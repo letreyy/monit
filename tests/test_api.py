@@ -655,6 +655,118 @@ def test_storage_migrates_events_fingerprint_column() -> None:
 
 
 
+
+
+def test_collector_and_ingest_endpoints_forbid_viewer_header_role() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-rbac-op", "name": "srv-rbac-op", "asset_type": "server", "location": "R13"},
+    )
+    viewer = {"X-Role": "viewer"}
+
+    create_col = client.post(
+        "/collectors",
+        headers=viewer,
+        json={
+            "id": "col-rbac-v",
+            "name": "rbac deny",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 22,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-rbac-op",
+        },
+    )
+    assert create_col.status_code == 403
+
+    one_event = client.post(
+        "/events",
+        headers=viewer,
+        json={
+            "asset_id": "srv-rbac-op",
+            "source": "syslog",
+            "message": "viewer denied",
+            "severity": "info",
+        },
+    )
+    assert one_event.status_code == 403
+
+    batch = client.post(
+        "/ingest/events",
+        headers=viewer,
+        json={
+            "events": [
+                {
+                    "asset_id": "srv-rbac-op",
+                    "source": "syslog",
+                    "message": "viewer denied batch",
+                    "severity": "info",
+                }
+            ]
+        },
+    )
+    assert batch.status_code == 403
+
+
+def test_collector_and_ingest_endpoints_allow_operator_header_role() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-rbac-op2", "name": "srv-rbac-op2", "asset_type": "server", "location": "R14"},
+    )
+    operator = {"X-Role": "operator"}
+
+    create_col = client.post(
+        "/collectors",
+        headers=operator,
+        json={
+            "id": "col-rbac-ok",
+            "name": "rbac allow",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 22,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-rbac-op2",
+        },
+    )
+    assert create_col.status_code == 200
+
+    list_col = client.get("/collectors", headers=operator)
+    assert list_col.status_code == 200
+
+    one_event = client.post(
+        "/events",
+        headers=operator,
+        json={
+            "asset_id": "srv-rbac-op2",
+            "source": "syslog",
+            "message": "operator allowed",
+            "severity": "info",
+        },
+    )
+    assert one_event.status_code == 200
+
+    batch = client.post(
+        "/ingest/events",
+        headers=operator,
+        json={
+            "events": [
+                {
+                    "asset_id": "srv-rbac-op2",
+                    "source": "syslog",
+                    "message": "operator allowed batch",
+                    "severity": "info",
+                }
+            ]
+        },
+    )
+    assert batch.status_code == 200
+
 def test_auth_whoami_with_role_header() -> None:
     resp = client.get("/auth/whoami", headers={"X-Role": "operator"})
     assert resp.status_code == 200

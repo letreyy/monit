@@ -486,6 +486,22 @@ def _resolve_role_from_request(
     return _normalize_role(default_role)
 
 
+ROLE_ORDER = {"viewer": 0, "operator": 1, "admin": 2}
+
+
+def _require_role(
+    request: Request,
+    role_hint: str | None,
+    minimum_role: str,
+    action: str,
+    default_role: str = "viewer",
+) -> str:
+    role_value = _resolve_role_from_request(request, role_hint, default_role=default_role)
+    if ROLE_ORDER[role_value] < ROLE_ORDER[minimum_role]:
+        raise HTTPException(status_code=403, detail=f"Role '{role_value}' is not allowed to {action}")
+    return role_value
+
+
 @app.get("/auth/whoami")
 def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bool]:
     resolved = _resolve_role_from_request(request, role, default_role="viewer")
@@ -550,9 +566,7 @@ def worker_history(
     has_error: bool | None = None,
     role: str | None = None,
 ) -> list[dict]:
-    role_value = _resolve_role_from_request(request, role, default_role="admin")
-    if not _can_view_worker_history(role_value):
-        raise HTTPException(status_code=403, detail="Role is not allowed to read worker history")
+    _require_role(request, role, minimum_role="operator", action="read worker history", default_role="admin")
     return worker.history(
         limit=limit,
         target_id=target_id,
@@ -570,9 +584,7 @@ def worker_history_csv(
     has_error: str | None = None,
     role: str | None = None,
 ) -> str:
-    role_value = _resolve_role_from_request(request, role, default_role="admin")
-    if not _can_view_worker_history(role_value):
-        raise HTTPException(status_code=403, detail="Role is not allowed to export worker history")
+    _require_role(request, role, minimum_role="operator", action="export worker history", default_role="admin")
     rows = worker.history(
         limit=limit,
         target_id=target_id,
@@ -1112,17 +1124,20 @@ def list_assets() -> list[Asset]:
 
 
 @app.post("/assets", response_model=Asset)
-def upsert_asset(asset: Asset) -> Asset:
+def upsert_asset(request: Request, asset: Asset, role: str | None = None) -> Asset:
+    _require_role(request, role, minimum_role="operator", action="upsert assets", default_role="admin")
     return service.upsert_asset(asset)
 
 
 @app.get("/collectors", response_model=list[CollectorTargetPublic])
-def list_collectors() -> list[CollectorTargetPublic]:
+def list_collectors(request: Request, role: str | None = None) -> list[CollectorTargetPublic]:
+    _require_role(request, role, minimum_role="operator", action="read collectors", default_role="admin")
     return [CollectorTargetPublic.from_target(t) for t in service.list_collector_targets()]
 
 
 @app.post("/collectors", response_model=CollectorTarget)
-def upsert_collector(target: CollectorTarget) -> CollectorTarget:
+def upsert_collector(request: Request, target: CollectorTarget, role: str | None = None) -> CollectorTarget:
+    _require_role(request, role, minimum_role="operator", action="upsert collectors", default_role="admin")
     try:
         return service.upsert_collector_target(target)
     except KeyError as exc:
@@ -1130,7 +1145,8 @@ def upsert_collector(target: CollectorTarget) -> CollectorTarget:
 
 
 @app.delete("/collectors/{target_id}")
-def delete_collector(target_id: str) -> dict[str, str]:
+def delete_collector(request: Request, target_id: str, role: str | None = None) -> dict[str, str]:
+    _require_role(request, role, minimum_role="operator", action="delete collectors", default_role="admin")
     service.delete_collector_target(target_id)
     return {"status": "deleted"}
 
@@ -1144,23 +1160,20 @@ def worker_status() -> dict:
 
 @app.get("/worker/targets")
 def worker_targets(request: Request, role: str | None = None) -> list[dict]:
-    role_value = _resolve_role_from_request(request, role, default_role="admin")
-    if not _can_view_worker_history(role_value):
-        raise HTTPException(status_code=403, detail="Role is not allowed to read worker targets")
+    _require_role(request, role, minimum_role="operator", action="read worker targets", default_role="admin")
     return worker.target_status()
 
 
 @app.post("/worker/run-once")
 def worker_run_once(request: Request, role: str | None = None) -> dict[str, int]:
-    role_value = _resolve_role_from_request(request, role, default_role="admin")
-    if not _can_control_worker(role_value):
-        raise HTTPException(status_code=403, detail="Role is not allowed to run worker")
+    _require_role(request, role, minimum_role="operator", action="run worker", default_role="admin")
     accepted = worker.run_once()
     return {"accepted": accepted}
 
 
 @app.post("/events", response_model=Event)
-def register_event(event: Event) -> Event:
+def register_event(request: Request, event: Event, role: str | None = None) -> Event:
+    _require_role(request, role, minimum_role="operator", action="ingest events", default_role="admin")
     try:
         stored, _ = service.register_event(event)
         return stored
@@ -1169,7 +1182,8 @@ def register_event(event: Event) -> Event:
 
 
 @app.post("/ingest/events", response_model=IngestSummary)
-def register_events_batch(batch: EventBatch) -> IngestSummary:
+def register_events_batch(request: Request, batch: EventBatch, role: str | None = None) -> IngestSummary:
+    _require_role(request, role, minimum_role="operator", action="ingest event batches", default_role="admin")
     try:
         accepted = service.register_events_batch(batch.events)
     except KeyError as exc:
