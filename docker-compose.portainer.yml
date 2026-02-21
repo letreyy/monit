@@ -22,6 +22,8 @@ services:
       SESSION_SECRET: "change-me"
       SESSION_COOKIE_NAME: "auth_session"
       ALLOW_QUERY_ROLE: "0"
+      TOKEN_TTL_SEC: "3600"
+      TOKEN_SECRET: "change-token-secret"
     volumes:
       - inframind_data:/app/data
 

@@ -769,6 +769,22 @@ def test_collector_and_ingest_endpoints_allow_operator_header_role() -> None:
 
 
 
+
+
+def test_auth_token_bearer_allows_operator_actions() -> None:
+    tok = client.post("/auth/token", data={"username": "ops", "password": "ops123"})
+    assert tok.status_code == 200
+    token = tok.json()["access_token"]
+
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.get("/worker/targets", headers=headers)
+    assert resp.status_code == 200
+
+
+def test_auth_token_invalid_credentials() -> None:
+    tok = client.post("/auth/token", data={"username": "ops", "password": "bad"})
+    assert tok.status_code == 401
+
 def test_auth_login_and_session_cookie_role_resolution() -> None:
     resp = client.post("/auth/login", data={"username": "ops", "password": "ops123"})
     assert resp.status_code == 200

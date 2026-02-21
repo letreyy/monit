@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from collections import Counter
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
 
@@ -42,6 +42,8 @@ ALLOW_QUERY_ROLE = os.getenv("ALLOW_QUERY_ROLE", "0") == "1"
 SESSION_COOKIE_NAME = os.getenv("SESSION_COOKIE_NAME", "auth_session")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-in-production")
 SESSION_TTL_SEC = int(os.getenv("SESSION_TTL_SEC", "86400"))
+TOKEN_SECRET = os.getenv("TOKEN_SECRET", "change-token-secret")
+TOKEN_TTL_SEC = int(os.getenv("TOKEN_TTL_SEC", "3600"))
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -92,6 +94,34 @@ def _parse_session_value(value: str | None) -> str | None:
         role, exp_s, sig = decoded.split("|", 2)
         payload = f"{role}|{exp_s}"
         if not hmac.compare_digest(sig, _session_sign(payload)):
+            return None
+        if int(exp_s) < int(time.time()):
+            return None
+        return _normalize_role(role)
+    except Exception:
+        return None
+
+
+def _token_sign(payload: str) -> str:
+    return hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+
+def _create_bearer_token(role: str) -> str:
+    exp = int(time.time()) + TOKEN_TTL_SEC
+    payload = f"{role}|{exp}"
+    sig = _token_sign(payload)
+    raw = f"{payload}|{sig}".encode()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def _parse_bearer_token(token: str | None) -> str | None:
+    if not token:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        role, exp_s, sig = decoded.split("|", 2)
+        payload = f"{role}|{exp_s}"
+        if not hmac.compare_digest(sig, _token_sign(payload)):
             return None
         if int(exp_s) < int(time.time()):
             return None
@@ -528,6 +558,9 @@ def _resolve_role_from_request(
     authz = request.headers.get("Authorization", "").strip()
     if authz.lower().startswith("bearer "):
         token = authz.split(" ", 1)[1].strip()
+        parsed_role = _parse_bearer_token(token)
+        if parsed_role:
+            return parsed_role
         if token in AUTH_TOKEN_ROLE_MAP:
             return _normalize_role(AUTH_TOKEN_ROLE_MAP[token])
 
@@ -595,6 +628,14 @@ def _require_role(
     return role_value
 
 
+def _require_operator_dependency(request: Request, role: str | None = None) -> str:
+    return _require_role(request, role, minimum_role="operator", action="operator action", default_role="admin")
+
+
+def _require_admin_dependency(request: Request, role: str | None = None) -> str:
+    return _require_role(request, role, minimum_role="admin", action="admin action", default_role="viewer")
+
+
 @app.get("/auth/whoami")
 def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bool]:
     resolved = _resolve_role_from_request(request, role, default_role="viewer")
@@ -624,6 +665,15 @@ def auth_login(username: str = Form(...), password: str = Form(...)) -> JSONResp
     return response
 
 
+@app.post("/auth/token")
+def auth_token(username: str = Form(...), password: str = Form(...)) -> dict[str, str | int]:
+    record = AUTH_USER_MAP.get(username.strip())
+    if not record or record[0] != password:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    role = _normalize_role(record[1])
+    return {"access_token": _create_bearer_token(role), "token_type": "bearer", "expires_in": TOKEN_TTL_SEC, "role": role}
+
+
 @app.post("/auth/logout")
 def auth_logout() -> JSONResponse:
     response = JSONResponse({"status": "ok"})
@@ -632,8 +682,7 @@ def auth_logout() -> JSONResponse:
 
 
 @app.get("/auth/audit")
-def auth_audit(request: Request, role: str | None = None, limit: int = 100) -> list[dict[str, str | int]]:
-    _require_role(request, role, minimum_role="admin", action="read access audit", default_role="viewer")
+def auth_audit(request: Request, limit: int = 100, _role: str = Depends(_require_admin_dependency)) -> list[dict[str, str | int]]:
     return [a.model_dump() for a in service.list_access_audit(limit=max(1, min(limit, 500)))]
 
 
@@ -1249,20 +1298,17 @@ def list_assets() -> list[Asset]:
 
 
 @app.post("/assets", response_model=Asset)
-def upsert_asset(request: Request, asset: Asset, role: str | None = None) -> Asset:
-    _require_role(request, role, minimum_role="operator", action="upsert assets", default_role="admin")
+def upsert_asset(request: Request, asset: Asset, _role: str = Depends(_require_operator_dependency)) -> Asset:
     return service.upsert_asset(asset)
 
 
 @app.get("/collectors", response_model=list[CollectorTargetPublic])
-def list_collectors(request: Request, role: str | None = None) -> list[CollectorTargetPublic]:
-    _require_role(request, role, minimum_role="operator", action="read collectors", default_role="admin")
+def list_collectors(request: Request, _role: str = Depends(_require_operator_dependency)) -> list[CollectorTargetPublic]:
     return [CollectorTargetPublic.from_target(t) for t in service.list_collector_targets()]
 
 
 @app.post("/collectors", response_model=CollectorTarget)
-def upsert_collector(request: Request, target: CollectorTarget, role: str | None = None) -> CollectorTarget:
-    _require_role(request, role, minimum_role="operator", action="upsert collectors", default_role="admin")
+def upsert_collector(request: Request, target: CollectorTarget, _role: str = Depends(_require_operator_dependency)) -> CollectorTarget:
     try:
         return service.upsert_collector_target(target)
     except KeyError as exc:
@@ -1270,8 +1316,7 @@ def upsert_collector(request: Request, target: CollectorTarget, role: str | None
 
 
 @app.delete("/collectors/{target_id}")
-def delete_collector(request: Request, target_id: str, role: str | None = None) -> dict[str, str]:
-    _require_role(request, role, minimum_role="operator", action="delete collectors", default_role="admin")
+def delete_collector(request: Request, target_id: str, _role: str = Depends(_require_operator_dependency)) -> dict[str, str]:
     service.delete_collector_target(target_id)
     return {"status": "deleted"}
 
@@ -1284,21 +1329,18 @@ def worker_status() -> dict:
 
 
 @app.get("/worker/targets")
-def worker_targets(request: Request, role: str | None = None) -> list[dict]:
-    _require_role(request, role, minimum_role="operator", action="read worker targets", default_role="admin")
+def worker_targets(request: Request, _role: str = Depends(_require_operator_dependency)) -> list[dict]:
     return worker.target_status()
 
 
 @app.post("/worker/run-once")
-def worker_run_once(request: Request, role: str | None = None) -> dict[str, int]:
-    _require_role(request, role, minimum_role="operator", action="run worker", default_role="admin")
+def worker_run_once(request: Request, _role: str = Depends(_require_operator_dependency)) -> dict[str, int]:
     accepted = worker.run_once()
     return {"accepted": accepted}
 
 
 @app.post("/events", response_model=Event)
-def register_event(request: Request, event: Event, role: str | None = None) -> Event:
-    _require_role(request, role, minimum_role="operator", action="ingest events", default_role="admin")
+def register_event(request: Request, event: Event, _role: str = Depends(_require_operator_dependency)) -> Event:
     try:
         stored, _ = service.register_event(event)
         return stored
@@ -1307,8 +1349,7 @@ def register_event(request: Request, event: Event, role: str | None = None) -> E
 
 
 @app.post("/ingest/events", response_model=IngestSummary)
-def register_events_batch(request: Request, batch: EventBatch, role: str | None = None) -> IngestSummary:
-    _require_role(request, role, minimum_role="operator", action="ingest event batches", default_role="admin")
+def register_events_batch(request: Request, batch: EventBatch, _role: str = Depends(_require_operator_dependency)) -> IngestSummary:
     try:
         accepted = service.register_events_batch(batch.events)
     except KeyError as exc:

@@ -787,3 +787,18 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 1. **Auth hardening**: заменить built-in users map на JWT/OIDC provider + refresh/rotation.
 2. **Policy layer extraction**: вынести checks в dependency/middleware слой и убрать ручные вызовы из endpoint-функций.
 3. **Product module**: role-aware UX presets + multi-tenant scoping в dashboard/diagnostics.
+
+## Следующий шаг (реализовано): Auth hardening + policy dependency layer (крупный модуль)
+
+Сделали ещё один крупный модуль:
+
+- добавлен endpoint `POST /auth/token` для Bearer access token (bootstrap-уровень);
+- role resolution поддерживает signed bearer token + static token map + session/header;
+- policy-check extraction: ключевые admin/operator endpoint'ы переведены на dependency-based guard (`Depends(...)`) вместо ручного вызова в каждом endpoint;
+- расширены env-настройки token-провайдера (`TOKEN_SECRET`, `TOKEN_TTL_SEC`).
+
+### Что дальше по плану (укрупнённо)
+
+1. **OIDC/JWT Provider**: заменить self-signed token на внешний provider (Keycloak/Auth0/Azure AD).
+2. **Policy Middleware Unification**: единый middleware/dependency для всего API, включая read-side scoped filtering.
+3. **Ops & Compliance**: persisted audit export/reporting + policy violation alerts.
