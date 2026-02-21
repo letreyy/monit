@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 from pathlib import Path
+from datetime import datetime, timedelta
 from collections import Counter
 from contextlib import asynccontextmanager
 
@@ -750,7 +751,11 @@ def ui_diagnostics(
     """
 
 
-def _build_dashboard_payload() -> dict:
+def _build_dashboard_payload(
+    period_days: int = 30,
+    asset_id: str | None = None,
+    source: str | None = None,
+) -> dict:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
 
@@ -762,24 +767,35 @@ def _build_dashboard_payload() -> dict:
         asset_event_counts[asset.id] = len(events)
         all_events.extend(events)
 
-    source_counts = Counter(e.source for e in all_events)
-    severity_counts = Counter(e.severity.value for e in all_events)
-    total_events = max(len(all_events), 1)
+    cutoff = datetime.utcnow() - timedelta(days=max(period_days, 1))
+    filtered_events = [
+        e
+        for e in all_events
+        if (not asset_id or e.asset_id == asset_id)
+        and (not source or e.source == source)
+        and (e.timestamp.replace(tzinfo=None) if e.timestamp.tzinfo else e.timestamp) >= cutoff
+    ]
+
+    source_counts = Counter(e.source for e in filtered_events)
+    severity_counts = Counter(e.severity.value for e in filtered_events)
+    total_events = max(len(filtered_events), 1)
 
     windows_events = source_counts.get("windows_eventlog", 0)
     syslog_events = source_counts.get("syslog", 0)
     agentless_events = sum(v for k, v in source_counts.items() if k.startswith("agentless_"))
 
     trend_counts: Counter[str] = Counter()
-    for e in all_events:
+    for e in filtered_events:
         month = str(e.timestamp)[:7]
         trend_counts[month] += 1
     trend_labels = sorted(trend_counts.keys())[-6:]
     trend_values = [trend_counts[m] for m in trend_labels]
 
+    filtered_asset_counts = Counter(e.asset_id for e in filtered_events)
+
     top_assets = [
         {"asset_id": aid, "events": cnt}
-        for aid, cnt in sorted(asset_event_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        for aid, cnt in sorted(filtered_asset_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
     ]
     recent_alerts = [
         {
@@ -788,25 +804,27 @@ def _build_dashboard_payload() -> dict:
             "severity": e.severity.value,
             "timestamp": str(e.timestamp),
         }
-        for e in sorted(all_events, key=lambda x: str(x.timestamp), reverse=True)
+        for e in sorted(filtered_events, key=lambda x: str(x.timestamp), reverse=True)
         if e.severity.value in ("warning", "critical")
     ][:7]
 
     assets_rows = []
     for asset in assets:
+        if asset_id and asset.id != asset_id:
+            continue
         assets_rows.append(
             {
                 "id": asset.id,
                 "asset_type": asset.asset_type.value,
                 "location": asset.location or "-",
-                "events": asset_event_counts.get(asset.id, 0),
+                "events": int(filtered_asset_counts.get(asset.id, 0)),
                 "alerts": len(service.build_alerts(asset.id)),
                 "insights": len(service.build_correlation_insights(asset.id)),
             }
         )
 
     return {
-        "overview": overview_data,
+        "overview": {**overview_data, "events_filtered": len(filtered_events)},
         "worker_health": worker_health_data,
         "sources": {
             "windows": windows_events,
@@ -825,17 +843,22 @@ def _build_dashboard_payload() -> dict:
         "top_assets": top_assets,
         "recent_alerts": recent_alerts,
         "assets_table": assets_rows,
+        "filters": {"period_days": period_days, "asset_id": asset_id or "", "source": source or ""},
+        "filter_options": {
+            "assets": [{"id": a.id, "name": a.name} for a in assets],
+            "sources": sorted({e.source for e in all_events}),
+        },
     }
 
 
 @app.get("/dashboard/data")
-def dashboard_data() -> dict:
-    return _build_dashboard_payload()
+def dashboard_data(period_days: int = 30, asset_id: str = "", source: str = "") -> dict:
+    return _build_dashboard_payload(period_days=period_days, asset_id=asset_id.strip() or None, source=source.strip() or None)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> str:
-    payload = _build_dashboard_payload()
+def dashboard(period_days: int = 30, asset_id: str = "", source: str = "") -> str:
+    payload = _build_dashboard_payload(period_days=period_days, asset_id=asset_id.strip() or None, source=source.strip() or None)
     pjson = json.dumps(payload)
     return f"""
     <html><head><style>
@@ -869,8 +892,20 @@ def dashboard() -> str:
           <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/collectors'>Collectors</a><a href='/ui/diagnostics'>Diagnostics</a>
         </div>
       </div>
-      <div class='container' id='dashboard-root' data-api='/dashboard/data'>
+      <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}'>
         <h2>Events Overview</h2>
+        <form id='dashboard-filters' style='display:flex;gap:8px;align-items:center;margin:8px 0 14px'>
+          <label>Period
+            <select name='period_days' id='flt-period'>
+              <option value='7'>7d</option>
+              <option value='30' selected>30d</option>
+              <option value='90'>90d</option>
+            </select>
+          </label>
+          <label>Asset <select name='asset_id' id='flt-asset'><option value=''>all</option></select></label>
+          <label>Source <select name='source' id='flt-source'><option value=''>all</option></select></label>
+          <button type='submit'>Apply</button>
+        </form>
         <div class='cards'>
           <div class='card'><div class='muted'>All Events</div><div class='metric' id='kpi-all'>0</div><div class='small' id='kpi-assets'>Across 0 assets</div></div>
           <div class='card'><div class='muted'>Windows Events</div><div class='metric' id='kpi-win'>0</div><div class='small' id='kpi-win-pct'>0% of all events</div></div>

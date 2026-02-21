@@ -440,6 +440,39 @@ def test_dashboard_data_endpoint_shape() -> None:
     assert "top_assets" in payload
     assert "recent_alerts" in payload
 
+
+
+def test_dashboard_data_filters() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-df", "name": "srv-df", "asset_type": "server", "location": "R12"},
+    )
+    client.post(
+        "/events",
+        json={
+            "asset_id": "srv-df",
+            "source": "windows_eventlog",
+            "message": "EventID=4625 failed",
+            "severity": "warning",
+        },
+    )
+    client.post(
+        "/events",
+        json={
+            "asset_id": "srv-df",
+            "source": "syslog",
+            "message": "kernel: info",
+            "severity": "info",
+        },
+    )
+
+    payload = client.get("/dashboard/data?asset_id=srv-df&source=windows_eventlog&period_days=30").json()
+    assert payload["overview"]["events_filtered"] >= 1
+    assert payload["sources"]["windows"] >= 1
+    assert payload["sources"]["syslog"] == 0
+    assert payload["filters"]["asset_id"] == "srv-df"
+    assert payload["filters"]["source"] == "windows_eventlog"
+
 def test_worker_history_endpoint_has_rows_after_run_once() -> None:
     client.post(
         "/assets",

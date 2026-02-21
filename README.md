@@ -683,3 +683,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: унифицировать dashboard + diagnostics на общем фронтенд-слое (единый JS toolkit/components), добавить фильтры периода/asset/type и подготовить базу под RBAC-видимость виджетов.
+
+## Следующий шаг (реализовано): dashboard filters (period/asset/source)
+
+Сделали следующий шаг roadmap:
+
+- для `GET /dashboard/data` добавлены фильтры `period_days`, `asset_id`, `source`;
+- в dashboard добавлена панель фильтров (период, asset, source), которая перерисовывает виджеты на лету;
+- KPI/графики/таблицы теперь отражают отфильтрованный срез (`events_filtered`).
+
+### Что дальше по плану
+
+Следующий шаг: применить ту же filter-модель к diagnostics и добавить role-based UI visibility (RBAC), чтобы разные роли видели только разрешённые блоки/targets.
