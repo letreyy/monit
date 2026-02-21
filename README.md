@@ -695,3 +695,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: применить ту же filter-модель к diagnostics и добавить role-based UI visibility (RBAC), чтобы разные роли видели только разрешённые блоки/targets.
+
+## Следующий шаг (реализовано): role-based UI visibility foundation (RBAC)
+
+Сделали следующий шаг roadmap:
+
+- в `GET /dashboard/data` добавлен параметр `role` (`viewer` / `operator` / `admin`);
+- payload теперь возвращает `permissions`, по которым фронтенд скрывает/показывает чувствительные блоки (`worker health`, `recent alerts`, ссылки на collectors/diagnostics);
+- на dashboard добавлен фильтр роли (`Role`) для проверки/демонстрации видимости в UI без перезагрузки архитектуры.
+
+### Что дальше по плану
+
+Следующий шаг: перенести ту же RBAC + filter-модель на diagnostics (включая data endpoints) и добавить server-side ограничения на чувствительные endpoint'ы, а не только UI-visibility.

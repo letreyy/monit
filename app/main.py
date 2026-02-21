@@ -751,13 +751,28 @@ def ui_diagnostics(
     """
 
 
+
+
+def _dashboard_permissions(role: str) -> dict[str, bool]:
+    role_value = role if role in {"viewer", "operator", "admin"} else "viewer"
+    return {
+        "show_worker_health": role_value in {"operator", "admin"},
+        "show_recent_alerts": role_value in {"operator", "admin"},
+        "show_collectors_link": role_value in {"operator", "admin"},
+        "show_diagnostics_link": role_value in {"operator", "admin"},
+        "show_filters": True,
+    }
+
 def _build_dashboard_payload(
     period_days: int = 30,
     asset_id: str | None = None,
     source: str | None = None,
+    role: str = "viewer",
 ) -> dict:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
+    role_value = role if role in {"viewer", "operator", "admin"} else "viewer"
+    permissions = _dashboard_permissions(role_value)
 
     assets = service.list_assets()
     asset_event_counts: dict[str, int] = {}
@@ -847,18 +862,31 @@ def _build_dashboard_payload(
         "filter_options": {
             "assets": [{"id": a.id, "name": a.name} for a in assets],
             "sources": sorted({e.source for e in all_events}),
+            "roles": ["viewer", "operator", "admin"],
         },
+        "role": role_value,
+        "permissions": permissions,
     }
 
 
 @app.get("/dashboard/data")
-def dashboard_data(period_days: int = 30, asset_id: str = "", source: str = "") -> dict:
-    return _build_dashboard_payload(period_days=period_days, asset_id=asset_id.strip() or None, source=source.strip() or None)
+def dashboard_data(period_days: int = 30, asset_id: str = "", source: str = "", role: str = "viewer") -> dict:
+    return _build_dashboard_payload(
+        period_days=period_days,
+        asset_id=asset_id.strip() or None,
+        source=source.strip() or None,
+        role=role.strip() or "viewer",
+    )
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(period_days: int = 30, asset_id: str = "", source: str = "") -> str:
-    payload = _build_dashboard_payload(period_days=period_days, asset_id=asset_id.strip() or None, source=source.strip() or None)
+def dashboard(period_days: int = 30, asset_id: str = "", source: str = "", role: str = "viewer") -> str:
+    payload = _build_dashboard_payload(
+        period_days=period_days,
+        asset_id=asset_id.strip() or None,
+        source=source.strip() or None,
+        role=role.strip() or "viewer",
+    )
     pjson = json.dumps(payload)
     return f"""
     <html><head><style>
@@ -889,10 +917,10 @@ def dashboard(period_days: int = 30, asset_id: str = "", source: str = "") -> st
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/collectors'>Collectors</a><a href='/ui/diagnostics'>Diagnostics</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a>
         </div>
       </div>
-      <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}'>
+      <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}'>
         <h2>Events Overview</h2>
         <form id='dashboard-filters' style='display:flex;gap:8px;align-items:center;margin:8px 0 14px'>
           <label>Period
@@ -904,6 +932,13 @@ def dashboard(period_days: int = 30, asset_id: str = "", source: str = "") -> st
           </label>
           <label>Asset <select name='asset_id' id='flt-asset'><option value=''>all</option></select></label>
           <label>Source <select name='source' id='flt-source'><option value=''>all</option></select></label>
+          <label>Role
+            <select name='role' id='flt-role'>
+              <option value='viewer'>viewer</option>
+              <option value='operator'>operator</option>
+              <option value='admin'>admin</option>
+            </select>
+          </label>
           <button type='submit'>Apply</button>
         </form>
         <div class='cards'>
@@ -931,7 +966,7 @@ def dashboard(period_days: int = 30, asset_id: str = "", source: str = "") -> st
               <table><tbody id='severity-rows'></tbody></table>
             </div>
           </div>
-          <div class='panel'>
+          <div class='panel' id='recent-alerts-panel'>
             <h3>Recent Alerts</h3>
             <div id='recent-alerts'><div class='muted'>No warning/critical events yet.</div></div>
           </div>

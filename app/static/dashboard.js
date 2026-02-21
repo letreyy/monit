@@ -40,6 +40,7 @@ function renderDashboard(payload) {
   const health = payload.worker_health || {};
   const filters = payload.filters || {};
   const options = payload.filter_options || {};
+  const permissions = payload.permissions || {};
 
   document.getElementById('kpi-all').textContent = overview.events_filtered ?? overview.events_total ?? 0;
   document.getElementById('kpi-assets').textContent = `Across ${overview.assets_total ?? 0} assets`;
@@ -53,12 +54,18 @@ function renderDashboard(payload) {
   const ring = document.getElementById('kpi-ring');
   ring.style.background = `conic-gradient(#0ea5e9 ${sources.agentless_pct ?? 0}%, #e2e8f0 0)`;
 
-  document.getElementById('worker-health').innerHTML = `
-    <b>Worker health:</b> ${health.running ? 'running' : 'stopped'} |
-    enabled: ${health.enabled} | tracked: ${health.tracked} |
-    failed: ${health.failed} | stale: ${health.stale} |
-    cycles: ${health.cycle_count} | <a href='/worker/health'>JSON</a>
-  `;
+  const workerHealth = document.getElementById('worker-health');
+  if (permissions.show_worker_health === false) {
+    workerHealth.style.display = 'none';
+  } else {
+    workerHealth.style.display = '';
+    workerHealth.innerHTML = `
+      <b>Worker health:</b> ${health.running ? 'running' : 'stopped'} |
+      enabled: ${health.enabled} | tracked: ${health.tracked} |
+      failed: ${health.failed} | stale: ${health.stale} |
+      cycles: ${health.cycle_count} | <a href='/worker/health'>JSON</a>
+    `;
+  }
 
   renderTrend(payload.trend || {});
 
@@ -74,20 +81,32 @@ function renderDashboard(payload) {
     <tr><td>Critical</td><td>${sev.critical ?? 0}</td></tr>
   `;
 
-  const alerts = payload.recent_alerts?.length
-    ? payload.recent_alerts.map((a) => `
-      <div class='alert-item ${a.severity}'>
-        <div class='alert-title'>${a.source}: ${String(a.message).slice(0, 110)}</div>
-        <div class='alert-ts'>${a.timestamp}</div>
-      </div>
-    `).join('')
-    : "<div class='muted'>No warning/critical events yet.</div>";
-  document.getElementById('recent-alerts').innerHTML = alerts;
+  const alertsPanel = document.getElementById('recent-alerts-panel');
+  if (permissions.show_recent_alerts === false) {
+    alertsPanel.style.display = 'none';
+  } else {
+    alertsPanel.style.display = '';
+    const alerts = payload.recent_alerts?.length
+      ? payload.recent_alerts.map((a) => `
+        <div class='alert-item ${a.severity}'>
+          <div class='alert-title'>${a.source}: ${String(a.message).slice(0, 110)}</div>
+          <div class='alert-ts'>${a.timestamp}</div>
+        </div>
+      `).join('')
+      : "<div class='muted'>No warning/critical events yet.</div>";
+    document.getElementById('recent-alerts').innerHTML = alerts;
+  }
 
   const assetsRows = payload.assets_table?.length
     ? payload.assets_table.map((a) => `<tr><td><a href='/ui/assets/${a.id}'>${a.id}</a></td><td>${a.asset_type}</td><td>${a.location}</td><td>${a.events}</td><td>${a.alerts}</td><td>${a.insights}</td></tr>`).join('')
     : "<tr><td colspan='6'>No assets yet</td></tr>";
   document.getElementById('assets-rows').innerHTML = assetsRows;
+
+
+  const navCollectors = document.getElementById('nav-collectors');
+  const navDiagnostics = document.getElementById('nav-diagnostics');
+  if (navCollectors) navCollectors.style.display = permissions.show_collectors_link === false ? 'none' : '';
+  if (navDiagnostics) navDiagnostics.style.display = permissions.show_diagnostics_link === false ? 'none' : '';
 
   fillSelect(
     document.getElementById('flt-asset'),
@@ -102,16 +121,24 @@ function renderDashboard(payload) {
     (o) => o.value,
   );
   document.getElementById('flt-period').value = String(filters.period_days || 30);
+  fillSelect(
+    document.getElementById('flt-role'),
+    (options.roles || ['viewer', 'operator', 'admin']).map((r) => ({ value: r })),
+    payload.role || 'viewer',
+    (o) => o.value,
+  );
 }
 
 function getFilterQuery() {
   const periodDays = document.getElementById('flt-period')?.value || '30';
   const assetId = document.getElementById('flt-asset')?.value || '';
   const source = document.getElementById('flt-source')?.value || '';
+  const role = document.getElementById('flt-role')?.value || 'viewer';
   const p = new URLSearchParams();
   p.set('period_days', periodDays);
   if (assetId) p.set('asset_id', assetId);
   if (source) p.set('source', source);
+  if (role) p.set('role', role);
   return p;
 }
 

@@ -425,6 +425,8 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert "/dashboard/data" in resp.text
     assert "/static/dashboard.js" in resp.text
     assert "worker-health" in resp.text
+    assert "flt-role" in resp.text
+    assert "nav-collectors" in resp.text
     assert "/worker/health" in resp.text
 
 
@@ -472,6 +474,20 @@ def test_dashboard_data_filters() -> None:
     assert payload["sources"]["syslog"] == 0
     assert payload["filters"]["asset_id"] == "srv-df"
     assert payload["filters"]["source"] == "windows_eventlog"
+
+
+
+def test_dashboard_data_role_permissions() -> None:
+    viewer = client.get("/dashboard/data?role=viewer").json()
+    operator = client.get("/dashboard/data?role=operator").json()
+
+    assert viewer["role"] == "viewer"
+    assert viewer["permissions"]["show_recent_alerts"] is False
+    assert viewer["permissions"]["show_worker_health"] is False
+
+    assert operator["role"] == "operator"
+    assert operator["permissions"]["show_recent_alerts"] is True
+    assert operator["permissions"]["show_worker_health"] is True
 
 def test_worker_history_endpoint_has_rows_after_run_once() -> None:
     client.post(
