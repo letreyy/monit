@@ -422,9 +422,23 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert "Events Overview" in resp.text
     assert "Logs Trend" in resp.text
     assert "Recent Alerts" in resp.text
-    assert "Worker health:" in resp.text
+    assert "/dashboard/data" in resp.text
+    assert "/static/dashboard.js" in resp.text
+    assert "worker-health" in resp.text
     assert "/worker/health" in resp.text
 
+
+
+
+def test_dashboard_data_endpoint_shape() -> None:
+    resp = client.get("/dashboard/data")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "overview" in payload
+    assert "sources" in payload
+    assert "trend" in payload
+    assert "top_assets" in payload
+    assert "recent_alerts" in payload
 
 def test_worker_history_endpoint_has_rows_after_run_once() -> None:
     client.post(

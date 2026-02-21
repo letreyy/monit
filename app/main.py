@@ -1,10 +1,12 @@
 import os
 import json
 import asyncio
+from pathlib import Path
 from collections import Counter
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
 from app.models import (
@@ -43,6 +45,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
 def _asset_exists(asset_id: str) -> bool:
@@ -747,8 +750,7 @@ def ui_diagnostics(
     """
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> str:
+def _build_dashboard_payload() -> dict:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
 
@@ -775,55 +777,66 @@ def dashboard() -> str:
     trend_labels = sorted(trend_counts.keys())[-6:]
     trend_values = [trend_counts[m] for m in trend_labels]
 
-    def _polyline(values: list[int]) -> str:
-        if not values:
-            return ""
-        max_val = max(values) or 1
-        points = []
-        for i, v in enumerate(values):
-            x = 20 + (i * 90)
-            y = 140 - int((v / max_val) * 110)
-            points.append(f"{x},{y}")
-        return " ".join(points)
-
-    top_assets = sorted(asset_event_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
-    top_rows = "".join(
-        f"<tr><td>{aid}</td><td>{cnt}</td></tr>" for aid, cnt in top_assets
-    ) or "<tr><td colspan='2'>No data</td></tr>"
-
-    recent_alert_candidates = [
-        e for e in sorted(all_events, key=lambda x: str(x.timestamp), reverse=True)
+    top_assets = [
+        {"asset_id": aid, "events": cnt}
+        for aid, cnt in sorted(asset_event_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+    ]
+    recent_alerts = [
+        {
+            "source": e.source,
+            "message": e.message,
+            "severity": e.severity.value,
+            "timestamp": str(e.timestamp),
+        }
+        for e in sorted(all_events, key=lambda x: str(x.timestamp), reverse=True)
         if e.severity.value in ("warning", "critical")
     ][:7]
-    recent_alerts_html = "".join(
-        f"<div class='alert-item {e.severity.value}'><div class='alert-title'>{e.source}: {e.message[:110]}</div><div class='alert-ts'>{e.timestamp}</div></div>"
-        for e in recent_alert_candidates
-    ) or "<div class='muted'>No warning/critical events yet.</div>"
 
-    severity_rows = "".join(
-        f"<tr><td>{level.title()}</td><td>{severity_counts.get(level, 0)}</td></tr>"
-        for level in ["info", "warning", "critical"]
-    )
-
-    rows = []
+    assets_rows = []
     for asset in assets:
-        alerts_count = len(service.build_alerts(asset.id))
-        insights_count = len(service.build_correlation_insights(asset.id))
-        events_count = asset_event_counts.get(asset.id, 0)
-        rows.append(
-            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
+        assets_rows.append(
+            {
+                "id": asset.id,
+                "asset_type": asset.asset_type.value,
+                "location": asset.location or "-",
+                "events": asset_event_counts.get(asset.id, 0),
+                "alerts": len(service.build_alerts(asset.id)),
+                "insights": len(service.build_correlation_insights(asset.id)),
+            }
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='6'>No assets yet</td></tr>"
 
-    win_pct = int((windows_events / total_events) * 100)
-    syslog_pct = int((syslog_events / total_events) * 100)
-    ag_pct = int((agentless_events / total_events) * 100)
-    trend_poly = _polyline(trend_values)
-    trend_points = "".join(
-        f"<text x='{20 + i * 90}' y='158' font-size='10' fill='#667'>{label[2:]}</text>" for i, label in enumerate(trend_labels)
-    )
+    return {
+        "overview": overview_data,
+        "worker_health": worker_health_data,
+        "sources": {
+            "windows": windows_events,
+            "syslog": syslog_events,
+            "agentless": agentless_events,
+            "windows_pct": int((windows_events / total_events) * 100),
+            "syslog_pct": int((syslog_events / total_events) * 100),
+            "agentless_pct": int((agentless_events / total_events) * 100),
+        },
+        "trend": {"labels": trend_labels, "values": trend_values},
+        "severity": {
+            "info": severity_counts.get("info", 0),
+            "warning": severity_counts.get("warning", 0),
+            "critical": severity_counts.get("critical", 0),
+        },
+        "top_assets": top_assets,
+        "recent_alerts": recent_alerts,
+        "assets_table": assets_rows,
+    }
 
+
+@app.get("/dashboard/data")
+def dashboard_data() -> dict:
+    return _build_dashboard_payload()
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard() -> str:
+    payload = _build_dashboard_payload()
+    pjson = json.dumps(payload)
     return f"""
     <html><head><style>
       body {{ font-family: Inter, Arial, sans-serif; margin:0; background:#f3f5f7; color:#1f2937; }}
@@ -856,45 +869,36 @@ def dashboard() -> str:
           <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/collectors'>Collectors</a><a href='/ui/diagnostics'>Diagnostics</a>
         </div>
       </div>
-      <div class='container'>
+      <div class='container' id='dashboard-root' data-api='/dashboard/data'>
         <h2>Events Overview</h2>
         <div class='cards'>
-          <div class='card'><div class='muted'>All Events</div><div class='metric'>{overview_data['events_total']}</div><div class='small'>Across {overview_data['assets_total']} assets</div></div>
-          <div class='card'><div class='muted'>Windows Events</div><div class='metric'>{windows_events}</div><div class='small'>{win_pct}% of all events</div></div>
-          <div class='card'><div class='muted'>Syslog Events</div><div class='metric'>{syslog_events}</div><div class='small'>{syslog_pct}% of all events</div></div>
-          <div class='card' style='display:flex;align-items:center;gap:8px'><div><div class='muted'>Agentless Events</div><div class='metric' style='font-size:30px'>{agentless_events}</div><div class='small'>{ag_pct}% of all events</div></div><div class='ring' style='background:conic-gradient(#0ea5e9 {ag_pct}%, #e2e8f0 0)'></div></div>
+          <div class='card'><div class='muted'>All Events</div><div class='metric' id='kpi-all'>0</div><div class='small' id='kpi-assets'>Across 0 assets</div></div>
+          <div class='card'><div class='muted'>Windows Events</div><div class='metric' id='kpi-win'>0</div><div class='small' id='kpi-win-pct'>0% of all events</div></div>
+          <div class='card'><div class='muted'>Syslog Events</div><div class='metric' id='kpi-syslog'>0</div><div class='small' id='kpi-syslog-pct'>0% of all events</div></div>
+          <div class='card' style='display:flex;align-items:center;gap:8px'><div><div class='muted'>Agentless Events</div><div class='metric' style='font-size:30px' id='kpi-agentless'>0</div><div class='small' id='kpi-agentless-pct'>0% of all events</div></div><div class='ring' id='kpi-ring'></div></div>
         </div>
 
-        <div class='health'>
-          <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} |
-          enabled: {worker_health_data['enabled']} | tracked: {worker_health_data['tracked']} |
-          failed: {worker_health_data['failed']} | stale: {worker_health_data['stale']} |
-          cycles: {worker_health_data['cycle_count']} | <a href='/worker/health'>JSON</a>
-        </div>
+        <div class='health' id='worker-health'><b>Worker health:</b> loading... | <a href='/worker/health'>JSON</a></div>
 
         <div class='grid'>
           <div class='panel'>
             <h3>Logs Trend</h3>
-            <svg width='560' height='170' style='max-width:100%;background:#fff'>
-              <line x1='20' y1='140' x2='540' y2='140' stroke='#cbd5e1' stroke-width='1' />
-              <polyline points='{trend_poly}' fill='rgba(14,165,233,0.15)' stroke='#0ea5e9' stroke-width='3' />
-              {trend_points}
-            </svg>
+            <svg width='560' height='170' style='max-width:100%;background:#fff' id='trend-svg'></svg>
           </div>
           <div class='panel'>
             <h3>Top 5 Assets</h3>
             <table>
               <thead><tr><th>Asset</th><th>Events</th></tr></thead>
-              <tbody>{top_rows}</tbody>
+              <tbody id='top-assets-rows'><tr><td colspan='2'>No data</td></tr></tbody>
             </table>
             <div style='margin-top:16px'>
               <div class='muted'>Severity Distribution</div>
-              <table><tbody>{severity_rows}</tbody></table>
+              <table><tbody id='severity-rows'></tbody></table>
             </div>
           </div>
           <div class='panel'>
             <h3>Recent Alerts</h3>
-            {recent_alerts_html}
+            <div id='recent-alerts'><div class='muted'>No warning/critical events yet.</div></div>
           </div>
         </div>
 
@@ -902,10 +906,12 @@ def dashboard() -> str:
           <h3 style='font-size:20px'>Assets table</h3>
           <table>
             <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
-            <tbody>{rows_html}</tbody>
+            <tbody id='assets-rows'><tr><td colspan='6'>No assets yet</td></tr></tbody>
           </table>
         </div>
       </div>
+      <script>window.__DASHBOARD_INITIAL__ = {pjson};</script>
+      <script type='module' src='/static/dashboard.js'></script>
     </body></html>
     """
 

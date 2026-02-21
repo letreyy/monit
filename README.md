@@ -671,3 +671,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: вынести dashboard/diagnostics фронтенд-логику в отдельный JS-модуль + API-first контракты для графиков (подготовка к более богатым интерактивным компонентам и RBAC/UI-ролям).
+
+## Следующий шаг (реализовано): модульный dashboard frontend + API-first data contract
+
+Сделали следующий шаг roadmap:
+
+- добавлен API endpoint `GET /dashboard/data` с агрегированным payload для визуализации (KPI, источники, trend, severity, top assets, recent alerts, assets table);
+- фронтенд dashboard вынесен в отдельный модуль `app/static/dashboard.js`;
+- `GET /dashboard` теперь рендерит shell-страницу и подключает модуль, который рисует виджеты из initial payload и обновляет данные через `/dashboard/data` по таймеру.
+
+### Что дальше по плану
+
+Следующий шаг: унифицировать dashboard + diagnostics на общем фронтенд-слое (единый JS toolkit/components), добавить фильтры периода/asset/type и подготовить базу под RBAC-видимость виджетов.
