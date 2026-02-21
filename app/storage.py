@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import Asset, CollectorState, CollectorTarget, Event, WorkerHistoryEntry
+from app.models import AccessAuditEntry, Asset, CollectorState, CollectorTarget, Event, WorkerHistoryEntry
 from app.security import SecretCodec, build_secret_codec
 
 
@@ -105,6 +105,18 @@ class SQLiteStorage:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS access_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    result TEXT NOT NULL
+                )
+                """
+            )
             self._ensure_events_columns(conn)
             conn.execute(
                 """
@@ -114,6 +126,11 @@ class SQLiteStorage:
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_worker_history_ts ON worker_history(ts)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_access_audit_ts ON access_audit(ts)
                 """
             )
             self._ensure_collector_target_columns(conn)
@@ -377,6 +394,40 @@ class SQLiteStorage:
         with self._connect() as conn:
             rows = conn.execute(q, tuple(params)).fetchall()
         return [WorkerHistoryEntry(**dict(r)) for r in rows]
+
+
+
+    def insert_access_audit(self, entry: AccessAuditEntry) -> AccessAuditEntry:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO access_audit(ts, path, role, action, result)
+                VALUES(?, ?, ?, ?, ?)
+                """,
+                (entry.ts, entry.path, entry.role, entry.action, entry.result),
+            )
+            conn.execute(
+                """
+                DELETE FROM access_audit
+                WHERE id NOT IN (
+                    SELECT id FROM access_audit ORDER BY id DESC LIMIT 500
+                )
+                """
+            )
+        return entry
+
+    def list_access_audit(self, limit: int = 100) -> list[AccessAuditEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT ts, path, role, action, result
+                FROM access_audit
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 500)),),
+            ).fetchall()
+        return [AccessAuditEntry(**dict(r)) for r in rows]
 
     @staticmethod
     def _fingerprint(event: Event) -> str:

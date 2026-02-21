@@ -773,3 +773,17 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 2. **Policy Module** — вынести `_require_role` в dependency/middleware слой и покрыть все endpoint-группы единообразно.
 3. **Operations Module** — audit persistence (SQLite), ротация/экспорт, алерты по deny-spikes.
 4. **Product Module** — multi-tenant visibility + role-based UX presets для dashboard/diagnostics.
+
+## Следующий шаг (реализовано): Identity+Policy+Operations bundle (крупный блок)
+
+Сделали укрупнённый пакет сразу:
+
+- **Identity**: session login/logout + bearer/header/session role resolution;
+- **Policy**: централизованный role-gate `_require_role` покрывает worker/collectors/ingest/admin-write API;
+- **Operations**: audit deny/allow теперь хранится в SQLite (`access_audit`) и читается через `GET /auth/audit` (admin-only).
+
+### Что дальше по плану (укрупнённо)
+
+1. **Auth hardening**: заменить built-in users map на JWT/OIDC provider + refresh/rotation.
+2. **Policy layer extraction**: вынести checks в dependency/middleware слой и убрать ручные вызовы из endpoint-функций.
+3. **Product module**: role-aware UX presets + multi-tenant scoping в dashboard/diagnostics.

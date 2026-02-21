@@ -144,3 +144,11 @@ class WorkerHistoryEntry(BaseModel):
     last_error: str | None = None
     failure_streak: int = 0
     last_cursor: str | None = None
+
+
+class AccessAuditEntry(BaseModel):
+    ts: int
+    path: str
+    role: str
+    action: str
+    result: str

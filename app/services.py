@@ -1,6 +1,7 @@
 import re
 
 from app.models import (
+    AccessAuditEntry,
     Alert,
     Asset,
     CollectorState,
@@ -61,6 +62,13 @@ class MonitoringService:
             collector_type=collector_type,
             has_error=has_error,
         )
+
+
+    def add_access_audit(self, entry: AccessAuditEntry) -> AccessAuditEntry:
+        return self.storage.insert_access_audit(entry)
+
+    def list_access_audit(self, limit: int = 100) -> list[AccessAuditEntry]:
+        return self.storage.list_access_audit(limit=limit)
 
     def register_event(self, event: Event) -> tuple[Event, bool]:
         if not self.storage.asset_exists(event.asset_id):

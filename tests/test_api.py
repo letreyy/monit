@@ -779,6 +779,17 @@ def test_auth_login_and_session_cookie_role_resolution() -> None:
     assert whoami.json()["role"] == "operator"
 
 
+
+
+def test_auth_audit_contains_policy_entries() -> None:
+    client.get("/worker/history", headers={"X-Role": "viewer"})
+    audit = client.get("/auth/audit?limit=5", headers={"X-Role": "admin"})
+    assert audit.status_code == 200
+    rows = audit.json()
+    assert isinstance(rows, list)
+    assert len(rows) >= 1
+    assert rows[0]["result"] in {"allow", "deny"}
+
 def test_auth_audit_admin_only() -> None:
     viewer = client.get("/auth/audit", headers={"X-Role": "viewer"})
     assert viewer.status_code == 403

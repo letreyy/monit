@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
 
 from app.models import (
+    AccessAuditEntry,
     Alert,
     Asset,
     AssetType,
@@ -549,13 +550,18 @@ def _resolve_role_from_request(
 
 
 ROLE_ORDER = {"viewer": 0, "operator": 1, "admin": 2}
-ACCESS_AUDIT: list[dict[str, str | int]] = []
 
 
 def _append_access_audit(entry: dict[str, str | int]) -> None:
-    ACCESS_AUDIT.append(entry)
-    if len(ACCESS_AUDIT) > 500:
-        del ACCESS_AUDIT[:-500]
+    service.add_access_audit(
+        AccessAuditEntry(
+            ts=int(entry.get("ts", int(time.time()))),
+            path=str(entry.get("path", "")),
+            role=str(entry.get("role", "viewer")),
+            action=str(entry.get("action", "")),
+            result=str(entry.get("result", "allow")),
+        )
+    )
 
 
 def _require_role(
@@ -628,7 +634,7 @@ def auth_logout() -> JSONResponse:
 @app.get("/auth/audit")
 def auth_audit(request: Request, role: str | None = None, limit: int = 100) -> list[dict[str, str | int]]:
     _require_role(request, role, minimum_role="admin", action="read access audit", default_role="viewer")
-    return ACCESS_AUDIT[-max(1, min(limit, 500)):]
+    return [a.model_dump() for a in service.list_access_audit(limit=max(1, min(limit, 500)))]
 
 
 def _build_diagnostics_summary(history: list[dict]) -> dict:
