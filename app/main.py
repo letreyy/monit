@@ -549,6 +549,8 @@ def home() -> str:
               <li><a href='/ui/assets'>UI: Add/List Assets</a></li>
               <li><a href='/ui/events'>UI: Add Event</a></li>
               <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
+              <li><a href='/ui/auth'>UI: Auth session</a></li>
+              <li><a href='/ui/compliance'>UI: Compliance center</a></li>
               <li><a href='/docs'>Swagger UI</a></li>
             </ul>
           </div>
@@ -556,6 +558,172 @@ def home() -> str:
       </div>
     </body></html>
     """
+
+
+def _ui_forbidden_page(title: str, message: str) -> str:
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 780px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:20px'>
+        <h1 style='margin-top:0'>{title}</h1>
+        <p>{message}</p>
+        <p><a href='/ui/auth'>Auth UI</a> | <a href='/dashboard'>Dashboard</a> | <a href='/'>Home</a></p>
+      </div>
+    </body></html>
+    """
+
+
+@app.get("/ui/auth", response_class=HTMLResponse)
+def ui_auth(request: Request) -> str:
+    context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
+    err = request.query_params.get("err", "").strip()
+    token = ""
+    if context.role == "admin":
+        token = _create_bearer_token("admin")
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 900px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>Auth session console</h1>
+      <p><a href='/'>← Home</a> | <a href='/ui/compliance'>Compliance UI</a> | <a href='/auth/whoami'>JSON whoami</a></p>
+      <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:14px'>
+        <h3 style='margin-top:0'>Current auth context</h3>
+        <p>Role: <b>{context.role}</b> | Source: <b>{context.source}</b> | Tenant: <b>{context.tenant_id or '-'}</b></p>
+        {"<p style='color:#b91c1c'><b>Login error:</b> invalid credentials</p>" if err else ""}
+      </div>
+      <div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px'>
+        <form method='post' action='/ui/auth/login' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+          <h3 style='margin-top:0'>Login (set session cookie)</h3>
+          <label>Username <input name='username' required /></label><br/><br/>
+          <label>Password <input name='password' type='password' required /></label><br/><br/>
+          <button type='submit'>Login</button>
+        </form>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+          <h3 style='margin-top:0'>Quick actions</h3>
+          <form method='post' action='/ui/auth/logout' style='margin:0 0 12px 0'><button type='submit'>Logout (clear session)</button></form>
+          <p style='margin:0'><b>Bootstrap bearer token (admin preview):</b></p>
+          <textarea rows='4' style='width:100%;font-family:monospace' readonly>{token}</textarea>
+        </div>
+      </div>
+    </body></html>
+    """
+
+
+@app.post("/ui/auth/login")
+def ui_auth_login(username: str = Form(...), password: str = Form(...)) -> RedirectResponse:
+    record = AUTH_USER_MAP.get(username.strip())
+    if not record or record[0] != password:
+        return RedirectResponse(url="/ui/auth?err=1", status_code=303)
+    role = _normalize_role(record[1])
+    response = RedirectResponse(url="/ui/auth", status_code=303)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=_create_session_value(role),
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_TTL_SEC,
+    )
+    return response
+
+
+@app.post("/ui/auth/logout")
+def ui_auth_logout() -> RedirectResponse:
+    response = RedirectResponse(url="/ui/auth", status_code=303)
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
+
+@app.get("/ui/compliance", response_class=HTMLResponse)
+def ui_compliance(request: Request, limit: int = 30) -> str:
+    context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
+    if ROLE_ORDER[context.role] < ROLE_ORDER["admin"]:
+        return _ui_forbidden_page("Compliance center", "Admin role is required. Login as admin via Auth UI.")
+
+    reports = list(COMPLIANCE_REPORTS)[: max(1, min(limit, 200))]
+    deliveries = list(COMPLIANCE_REPORT_DELIVERIES)[: max(1, min(limit, 200))]
+    status = {
+        "interval": COMPLIANCE_REPORT_INTERVAL_SEC,
+        "retention": COMPLIANCE_REPORT_RETENTION,
+        "reports": len(COMPLIANCE_REPORTS),
+        "last_ts": COMPLIANCE_LAST_REPORT_TS,
+        "webhook": bool(COMPLIANCE_WEBHOOK_URL.strip()),
+        "email": bool(COMPLIANCE_EMAIL_TO.strip()),
+    }
+    summary = _build_compliance_summary(limit=1000)
+    report_rows = "".join(
+        f"<tr><td>{r.get('id')}</td><td>{r.get('trigger')}</td><td>{r.get('ts')}</td><td>{int((r.get('summary') or {}).get('allow', 0))}</td><td>{int((r.get('summary') or {}).get('deny', 0))}</td></tr>"
+        for r in reports
+    ) or "<tr><td colspan='5'>No reports yet</td></tr>"
+    delivery_rows = "".join(
+        f"<tr><td>{d.get('ts')}</td><td>{d.get('report_id')}</td><td>{d.get('channel')}</td><td>{d.get('destination')}</td><td>{d.get('status')}</td></tr>"
+        for d in deliveries
+    ) or "<tr><td colspan='5'>No deliveries yet</td></tr>"
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>Compliance center</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/auth'>Auth UI</a> | <a href='/auth/compliance/status'>JSON status</a></p>
+      <div style='display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px'>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:14px'><b>Reports:</b> {status['reports']}</div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:14px'><b>Interval:</b> {status['interval']} sec</div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:14px'><b>Last report ts:</b> {status['last_ts'] or '-'}</div>
+      </div>
+      <div style='margin-top:12px;background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:14px'>
+        <p style='margin:0'><b>Audit summary:</b> rows={summary['rows']}, allow={summary['allow']}, deny={summary['deny']}</p>
+      </div>
+      <div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:12px'>
+        <form method='post' action='/ui/compliance/run' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+          <h3 style='margin-top:0'>Generate report</h3>
+          <button type='submit'>Run now</button>
+        </form>
+        <form method='post' action='/ui/compliance/purge' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+          <h3 style='margin-top:0'>Retention purge</h3>
+          <label>Audit max age sec <input type='number' name='audit_max_age_sec' value='2592000' min='0' /></label><br/><br/>
+          <label>Worker history max age sec <input type='number' name='worker_history_max_age_sec' value='2592000' min='0' /></label><br/><br/>
+          <label><input type='checkbox' name='drop_jwt_reject_telemetry'/> Drop JWT reject telemetry</label><br/><br/>
+          <button type='submit'>Run purge</button>
+        </form>
+      </div>
+      <h2>Reports</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>ID</th><th>Trigger</th><th>TS</th><th>Allow</th><th>Deny</th></tr></thead>
+        <tbody>{report_rows}</tbody>
+      </table>
+      <h2>Deliveries</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>TS</th><th>Report ID</th><th>Channel</th><th>Destination</th><th>Status</th></tr></thead>
+        <tbody>{delivery_rows}</tbody>
+      </table>
+    </body></html>
+    """
+
+
+@app.post("/ui/compliance/run")
+def ui_compliance_run(request: Request) -> RedirectResponse:
+    context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
+    if ROLE_ORDER[context.role] < ROLE_ORDER["admin"]:
+        return RedirectResponse(url="/ui/auth", status_code=303)
+    _generate_compliance_report(trigger="manual-ui")
+    return RedirectResponse(url="/ui/compliance", status_code=303)
+
+
+@app.post("/ui/compliance/purge")
+def ui_compliance_purge(
+    request: Request,
+    audit_max_age_sec: int = Form(30 * 24 * 3600),
+    worker_history_max_age_sec: int = Form(30 * 24 * 3600),
+    drop_jwt_reject_telemetry: str | None = Form(None),
+) -> RedirectResponse:
+    context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
+    if ROLE_ORDER[context.role] < ROLE_ORDER["admin"]:
+        return RedirectResponse(url="/ui/auth", status_code=303)
+    now = int(time.time())
+    audit_min_ts = now - max(0, audit_max_age_sec)
+    worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
+    service.delete_access_audit_older_than(audit_min_ts)
+    service.delete_worker_history_older_than(worker_min_ts_iso)
+    if drop_jwt_reject_telemetry is not None:
+        JWT_REJECT_TELEMETRY.clear()
+        JWT_REJECT_BY_ISSUER_CLIENT.clear()
+        JWT_REJECT_EVENTS.clear()
+    return RedirectResponse(url="/ui/compliance", status_code=303)
 
 
 @app.get("/ui/collectors", response_class=HTMLResponse)
@@ -1799,7 +1967,7 @@ def dashboard(
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
         </div>
       </div>
       <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>

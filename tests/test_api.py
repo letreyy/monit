@@ -1286,6 +1286,42 @@ def test_worker_sensitive_endpoints_allow_operator_header_role() -> None:
     assert client.get("/worker/targets", headers=headers).status_code == 200
     assert client.post("/worker/run-once", headers=headers).status_code == 200
 
+
+def test_ui_auth_and_compliance_console_flow() -> None:
+    ui_auth = client.get("/ui/auth")
+    assert ui_auth.status_code == 200
+    assert "Auth session console" in ui_auth.text
+
+    login = client.post(
+        "/ui/auth/login",
+        data={"username": "admin", "password": "admin123"},
+        follow_redirects=False,
+    )
+    assert login.status_code == 303
+    cookie = login.headers.get("set-cookie", "")
+    assert "auth_session=" in cookie
+
+    session_cookie = cookie.split(";", 1)[0]
+    headers = {"cookie": session_cookie}
+
+    ui_compliance = client.get("/ui/compliance", headers=headers)
+    assert ui_compliance.status_code == 200
+    assert "Compliance center" in ui_compliance.text
+
+    run = client.post("/ui/compliance/run", headers=headers, follow_redirects=False)
+    assert run.status_code == 303
+
+    reports = client.get("/auth/compliance/reports", headers={"X-Role": "admin"}).json()
+    assert len(reports) >= 1
+
+    purge = client.post(
+        "/ui/compliance/purge",
+        headers=headers,
+        data={"audit_max_age_sec": "1", "worker_history_max_age_sec": "1", "drop_jwt_reject_telemetry": "on"},
+        follow_redirects=False,
+    )
+    assert purge.status_code == 303
+
 def test_worker_sensitive_endpoints_query_role_disabled_by_default() -> None:
     assert client.get("/worker/history?role=viewer").status_code == 200
     assert client.get("/worker/history.csv?role=viewer").status_code == 200

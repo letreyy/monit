@@ -230,6 +230,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 ### 2) Ingestion и API
 - REST API для ассетов, событий, batch-ingest и обзорной статистики.
 - UI-формы для управления ассетами/событиями/коллекторами.
+- UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
 ### 3) Agentless collectors
