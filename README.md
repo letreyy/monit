@@ -262,8 +262,12 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - Admin endpoints:
   - `/auth/audit`, `/auth/audit.csv`, `/auth/audit/summary`, `/auth/audit/alerts`.
   - `/auth/jwt/reject-telemetry`.
+- Compliance automation:
+  - запуски compliance-отчётов (`/auth/compliance/run`) и просмотр истории отчётов (`/auth/compliance/reports`);
+  - статус/маршрутизация отчётов (`/auth/compliance/status`, `/auth/compliance/deliveries`) для webhook/email каналов;
+  - admin purge endpoint (`/auth/compliance/purge`) для retention-очистки access-audit/worker-history и telemetry reset.
 
 ## Что дальше (укрупнённо)
-1. **OIDC enterprise hardening**: policy packs по issuer/client (azp/scp/groups), richer reject analytics.
-2. **Compliance automation**: scheduled reports, webhook/email routing, retention/purge policies.
+1. ✅ **OIDC enterprise hardening (базовый пакет)**: issuer-aware claim mapping (`role/scope/groups`) + richer JWT reject analytics (reason + issuer/client details).
+2. ✅ **Compliance automation (базовый пакет)**: scheduled compliance reports + routing stubs + retention/purge policies.
 3. **AI log analytics**: anomaly detection/clusterization + explainable insights поверх текущих rule/correlation механизмов.

@@ -7,7 +7,7 @@ import hashlib
 import base64
 from pathlib import Path
 from datetime import datetime, timedelta
-from collections import Counter
+from collections import Counter, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from urllib.request import urlopen
@@ -61,6 +61,15 @@ AUTH_JWT_LEEWAY_SEC = int(os.getenv("AUTH_JWT_LEEWAY_SEC", "30"))
 AUTH_ROLE_SCOPES_MAP = os.getenv("AUTH_ROLE_SCOPES_MAP", "monitor.admin:admin,monitor.write:operator,monitor.read:viewer")
 AUTH_ROLE_GROUPS_MAP = os.getenv("AUTH_ROLE_GROUPS_MAP", "admins:admin,operators:operator,viewers:viewer")
 AUTH_TENANT_HEADER_NAME = os.getenv("AUTH_TENANT_HEADER_NAME", "X-Tenant")
+AUTH_SCOPE_CLAIM = os.getenv("AUTH_SCOPE_CLAIM", "scope")
+AUTH_GROUPS_CLAIM = os.getenv("AUTH_GROUPS_CLAIM", "groups")
+AUTH_ISSUER_ROLE_CLAIM_MAP = os.getenv("AUTH_ISSUER_ROLE_CLAIM_MAP", "")
+AUTH_ISSUER_SCOPE_CLAIM_MAP = os.getenv("AUTH_ISSUER_SCOPE_CLAIM_MAP", "")
+AUTH_ISSUER_GROUP_CLAIM_MAP = os.getenv("AUTH_ISSUER_GROUP_CLAIM_MAP", "")
+COMPLIANCE_REPORT_INTERVAL_SEC = int(os.getenv("COMPLIANCE_REPORT_INTERVAL_SEC", "3600"))
+COMPLIANCE_REPORT_RETENTION = int(os.getenv("COMPLIANCE_REPORT_RETENTION", "100"))
+COMPLIANCE_WEBHOOK_URL = os.getenv("COMPLIANCE_WEBHOOK_URL", "")
+COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -151,18 +160,62 @@ def _parse_role_mapping(raw: str) -> dict[str, str]:
     return out
 
 
+
+
+def _parse_claim_name_mapping(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item or ":" not in item:
+            continue
+        issuer, claim = item.split(":", 1)
+        if issuer.strip() and claim.strip():
+            out[issuer.strip()] = claim.strip()
+    return out
+
+
+def _jwt_unverified_claims(token: str | None) -> dict[str, object]:
+    if not token or token.count(".") != 2:
+        return {}
+    try:
+        _h, payload_b64, _s = token.split(".")
+        payload = json.loads(_b64url_decode(payload_b64).decode())
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        return {}
+    return {}
+
 ROLE_PRIORITY = {"viewer": 0, "operator": 1, "admin": 2}
 ROLE_SCOPES_MAP = _parse_role_mapping(AUTH_ROLE_SCOPES_MAP)
 ROLE_GROUPS_MAP = _parse_role_mapping(AUTH_ROLE_GROUPS_MAP)
+ISSUER_ROLE_CLAIM_MAP = _parse_claim_name_mapping(AUTH_ISSUER_ROLE_CLAIM_MAP)
+ISSUER_SCOPE_CLAIM_MAP = _parse_claim_name_mapping(AUTH_ISSUER_SCOPE_CLAIM_MAP)
+ISSUER_GROUP_CLAIM_MAP = _parse_claim_name_mapping(AUTH_ISSUER_GROUP_CLAIM_MAP)
 JWT_REJECT_TELEMETRY: Counter[str] = Counter()
+JWT_REJECT_BY_ISSUER_CLIENT: Counter[str] = Counter()
+JWT_REJECT_EVENTS: deque[dict[str, str | int]] = deque(maxlen=500)
+COMPLIANCE_REPORTS: deque[dict[str, object]] = deque(maxlen=max(10, COMPLIANCE_REPORT_RETENTION))
+COMPLIANCE_REPORT_DELIVERIES: deque[dict[str, object]] = deque(maxlen=500)
+COMPLIANCE_LAST_REPORT_TS = 0
 
 
-def _record_jwt_reject(reason: str) -> None:
+def _record_jwt_reject(reason: str, token: str | None = None) -> None:
     JWT_REJECT_TELEMETRY[reason] += 1
+    claims = _jwt_unverified_claims(token)
+    issuer = str(claims.get("iss", "unknown"))
+    client = str(claims.get("azp") or claims.get("client_id") or "unknown")
+    JWT_REJECT_BY_ISSUER_CLIENT[f"{issuer}|{client}"] += 1
+    JWT_REJECT_EVENTS.appendleft({"ts": int(time.time()), "reason": reason, "issuer": issuer, "client": client})
 
 
 def _role_from_claim_mapping(payload: dict[str, object]) -> str | None:
-    role_val = payload.get(AUTH_JWT_ROLE_CLAIM)
+    issuer = str(payload.get("iss", ""))
+    role_claim = ISSUER_ROLE_CLAIM_MAP.get(issuer, AUTH_JWT_ROLE_CLAIM)
+    scope_claim = ISSUER_SCOPE_CLAIM_MAP.get(issuer, AUTH_SCOPE_CLAIM)
+    group_claim = ISSUER_GROUP_CLAIM_MAP.get(issuer, AUTH_GROUPS_CLAIM)
+
+    role_val = payload.get(role_claim)
     if isinstance(role_val, list):
         for v in role_val:
             n = _normalize_role(str(v))
@@ -173,7 +226,7 @@ def _role_from_claim_mapping(payload: dict[str, object]) -> str | None:
         if role != "viewer" or str(role_val) == "viewer":
             return role
 
-    scopes = payload.get("scope")
+    scopes = payload.get(scope_claim)
     scope_values: list[str] = []
     if isinstance(scopes, str):
         scope_values = [x.strip() for x in scopes.split(" ") if x.strip()]
@@ -181,7 +234,7 @@ def _role_from_claim_mapping(payload: dict[str, object]) -> str | None:
         scope_values = [str(x) for x in scopes]
     mapped = [ROLE_SCOPES_MAP[s] for s in scope_values if s in ROLE_SCOPES_MAP]
 
-    groups = payload.get("groups")
+    groups = payload.get(group_claim)
     group_values: list[str] = []
     if isinstance(groups, list):
         group_values = [str(x) for x in groups]
@@ -294,11 +347,11 @@ def _parse_jwt_rs256_role(token: str | None) -> str | None:
         header_b64, payload_b64, sig_b64 = token.split(".")
         header = json.loads(_b64url_decode(header_b64).decode())
         if header.get("alg") != "RS256":
-            _record_jwt_reject("rs256_bad_alg")
+            _record_jwt_reject("rs256_bad_alg", token)
             return None
         kid = str(header.get("kid", "")).strip()
         if not kid:
-            _record_jwt_reject("rs256_missing_kid")
+            _record_jwt_reject("rs256_missing_kid", token)
             return None
 
         keys = _fetch_jwks_keys()
@@ -307,7 +360,7 @@ def _parse_jwt_rs256_role(token: str | None) -> str | None:
             keys = _fetch_jwks_keys(force_refresh=True)
             pub = keys.get(kid)
         if pub is None:
-            _record_jwt_reject("rs256_unknown_kid")
+            _record_jwt_reject("rs256_unknown_kid", token)
             return None
 
         signing_input = f"{header_b64}.{payload_b64}".encode()
@@ -316,16 +369,16 @@ def _parse_jwt_rs256_role(token: str | None) -> str | None:
 
         payload = json.loads(_b64url_decode(payload_b64).decode())
         if not _validate_jwt_payload_claims(payload):
-            _record_jwt_reject("claim_validation_failed")
+            _record_jwt_reject("claim_validation_failed", token)
             return None
 
         role = _role_from_claim_mapping(payload)
         if role is None:
-            _record_jwt_reject("role_mapping_failed")
+            _record_jwt_reject("role_mapping_failed", token)
             return None
         return role
     except (ValueError, InvalidSignature, TypeError):
-        _record_jwt_reject("rs256_parse_or_verify_failed")
+        _record_jwt_reject("rs256_parse_or_verify_failed", token)
         return None
 
 def _parse_jwt_hs256_role(token: str | None) -> str | None:
@@ -341,21 +394,21 @@ def _parse_jwt_hs256_role(token: str | None) -> str | None:
 
         header = json.loads(_b64url_decode(header_b64).decode())
         if header.get("alg") != "HS256":
-            _record_jwt_reject("hs256_bad_alg")
+            _record_jwt_reject("hs256_bad_alg", token)
             return None
 
         payload = json.loads(_b64url_decode(payload_b64).decode())
         if not _validate_jwt_payload_claims(payload):
-            _record_jwt_reject("claim_validation_failed")
+            _record_jwt_reject("claim_validation_failed", token)
             return None
 
         role = _role_from_claim_mapping(payload)
         if role is None:
-            _record_jwt_reject("role_mapping_failed")
+            _record_jwt_reject("role_mapping_failed", token)
             return None
         return role
     except Exception:
-        _record_jwt_reject("hs256_parse_or_verify_failed")
+        _record_jwt_reject("hs256_parse_or_verify_failed", token)
         return None
 
 def _create_bearer_token(role: str) -> str:
@@ -416,6 +469,12 @@ POLICY_RULES: list[tuple[str, str, str, str, str]] = [
     ("GET", "/auth/audit/summary", "admin", "read auth audit summary", "viewer"),
     ("GET", "/auth/audit/alerts", "admin", "read auth audit alerts", "viewer"),
     ("GET", "/auth/jwt/reject-telemetry", "admin", "read jwt reject telemetry", "viewer"),
+    ("GET", "/auth/jwt/reject-telemetry/details", "admin", "read jwt reject telemetry details", "viewer"),
+    ("GET", "/auth/compliance/status", "admin", "read compliance status", "viewer"),
+    ("GET", "/auth/compliance/reports", "admin", "read compliance reports", "viewer"),
+    ("POST", "/auth/compliance/run", "admin", "run compliance report", "viewer"),
+    ("POST", "/auth/compliance/purge", "admin", "run compliance purge", "viewer"),
+    ("GET", "/auth/compliance/deliveries", "admin", "read compliance deliveries", "viewer"),
     ("GET", "/worker/history", "operator", "read worker history", "admin"),
     ("GET", "/worker/history.csv", "operator", "export worker history", "admin"),
     ("GET", "/worker/targets", "operator", "read worker targets", "admin"),
@@ -447,6 +506,7 @@ async def auth_context_middleware(request: Request, call_next):
             _require_role(request, role_hint, minimum_role=min_role, action=action, default_role=default_role)
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    _ensure_scheduled_compliance_report()
     return await call_next(request)
 
 
@@ -920,6 +980,62 @@ def _append_access_audit(entry: dict[str, str | int]) -> None:
     )
 
 
+def _build_compliance_summary(limit: int = 1000) -> dict[str, object]:
+    rows = service.list_access_audit(limit=max(1, min(limit, 5000)))
+    by_result = Counter(a.result for a in rows)
+    by_role = Counter(a.role for a in rows)
+    return {
+        "rows": len(rows),
+        "allow": by_result.get("allow", 0),
+        "deny": by_result.get("deny", 0),
+        "by_role": dict(by_role),
+        "jwt_rejects": dict(JWT_REJECT_TELEMETRY),
+    }
+
+
+def _route_compliance_report(report_id: str) -> None:
+    ts = int(time.time())
+    routes = [
+        ("webhook", COMPLIANCE_WEBHOOK_URL.strip()),
+        ("email", COMPLIANCE_EMAIL_TO.strip()),
+    ]
+    if not any(dest for _, dest in routes):
+        COMPLIANCE_REPORT_DELIVERIES.appendleft(
+            {"ts": ts, "report_id": report_id, "channel": "none", "destination": "", "status": "skipped"}
+        )
+        return
+
+    for channel, destination in routes:
+        if not destination:
+            continue
+        COMPLIANCE_REPORT_DELIVERIES.appendleft(
+            {"ts": ts, "report_id": report_id, "channel": channel, "destination": destination, "status": "configured"}
+        )
+
+
+def _generate_compliance_report(trigger: str = "manual") -> dict[str, object]:
+    global COMPLIANCE_LAST_REPORT_TS
+    now = int(time.time())
+    report = {
+        "id": f"cr-{now}",
+        "ts": now,
+        "trigger": trigger,
+        "summary": _build_compliance_summary(limit=2000),
+    }
+    COMPLIANCE_REPORTS.appendleft(report)
+    COMPLIANCE_LAST_REPORT_TS = now
+    _route_compliance_report(report["id"])
+    return report
+
+
+def _ensure_scheduled_compliance_report() -> None:
+    if COMPLIANCE_REPORT_INTERVAL_SEC <= 0:
+        return
+    now = int(time.time())
+    if now - int(COMPLIANCE_LAST_REPORT_TS) >= COMPLIANCE_REPORT_INTERVAL_SEC:
+        _generate_compliance_report(trigger="scheduled")
+
+
 def _require_role(
     request: Request,
     role_hint: str | None,
@@ -983,6 +1099,7 @@ def auth_whoami(request: Request, role: str | None = None) -> dict[str, str | bo
         "jwt_hs256_enabled": bool(AUTH_JWT_HS256_SECRET),
         "jwt_jwks_enabled": bool(_resolve_jwks_url()),
         "oidc_discovery_enabled": bool(AUTH_OIDC_DISCOVERY_URL),
+        "issuer_role_profiles": len(ISSUER_ROLE_CLAIM_MAP),
     }
 
 
@@ -1065,7 +1182,74 @@ def auth_audit_alerts(request: Request, lookback: int = 200, deny_threshold: int
 
 @app.get("/auth/jwt/reject-telemetry")
 def auth_jwt_reject_telemetry(request: Request, _role: str = Depends(_require_admin_dependency)) -> dict:
-    return {"counters": dict(JWT_REJECT_TELEMETRY)}
+    return {"counters": dict(JWT_REJECT_TELEMETRY), "by_issuer_client": dict(JWT_REJECT_BY_ISSUER_CLIENT)}
+
+
+@app.get("/auth/jwt/reject-telemetry/details")
+def auth_jwt_reject_telemetry_details(request: Request, limit: int = 100, _role: str = Depends(_require_admin_dependency)) -> list[dict[str, str | int]]:
+    n = max(1, min(limit, 500))
+    return list(JWT_REJECT_EVENTS)[:n]
+
+
+@app.get("/auth/compliance/status")
+def auth_compliance_status(request: Request, _role: str = Depends(_require_admin_dependency)) -> dict[str, object]:
+    return {
+        "report_interval_sec": COMPLIANCE_REPORT_INTERVAL_SEC,
+        "report_retention": COMPLIANCE_REPORT_RETENTION,
+        "reports": len(COMPLIANCE_REPORTS),
+        "last_report_ts": COMPLIANCE_LAST_REPORT_TS,
+        "webhook_configured": bool(COMPLIANCE_WEBHOOK_URL.strip()),
+        "email_configured": bool(COMPLIANCE_EMAIL_TO.strip()),
+    }
+
+
+@app.post("/auth/compliance/run")
+def auth_compliance_run(request: Request, _role: str = Depends(_require_admin_dependency)) -> dict[str, object]:
+    return _generate_compliance_report(trigger="manual")
+
+
+@app.get("/auth/compliance/reports")
+def auth_compliance_reports(request: Request, limit: int = 20, _role: str = Depends(_require_admin_dependency)) -> list[dict[str, object]]:
+    n = max(1, min(limit, 200))
+    return list(COMPLIANCE_REPORTS)[:n]
+
+
+@app.get("/auth/compliance/reports/{report_id}")
+def auth_compliance_report_by_id(report_id: str, request: Request, _role: str = Depends(_require_admin_dependency)) -> dict[str, object]:
+    for report in COMPLIANCE_REPORTS:
+        if report.get("id") == report_id:
+            return report
+    raise HTTPException(status_code=404, detail="Compliance report not found")
+
+
+@app.get("/auth/compliance/deliveries")
+def auth_compliance_deliveries(request: Request, limit: int = 50, _role: str = Depends(_require_admin_dependency)) -> list[dict[str, object]]:
+    n = max(1, min(limit, 500))
+    return list(COMPLIANCE_REPORT_DELIVERIES)[:n]
+
+
+@app.post("/auth/compliance/purge")
+def auth_compliance_purge(
+    request: Request,
+    audit_max_age_sec: int = 30 * 24 * 3600,
+    worker_history_max_age_sec: int = 30 * 24 * 3600,
+    drop_jwt_reject_telemetry: bool = False,
+    _role: str = Depends(_require_admin_dependency),
+) -> dict[str, int | bool]:
+    now = int(time.time())
+    audit_min_ts = now - max(0, audit_max_age_sec)
+    worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
+    deleted_audit = service.delete_access_audit_older_than(audit_min_ts)
+    deleted_worker_history = service.delete_worker_history_older_than(worker_min_ts_iso)
+    if drop_jwt_reject_telemetry:
+        JWT_REJECT_TELEMETRY.clear()
+        JWT_REJECT_BY_ISSUER_CLIENT.clear()
+        JWT_REJECT_EVENTS.clear()
+    return {
+        "deleted_audit": deleted_audit,
+        "deleted_worker_history": deleted_worker_history,
+        "jwt_reject_telemetry_cleared": drop_jwt_reject_telemetry,
+    }
 
 
 def _build_diagnostics_summary(history: list[dict]) -> dict:

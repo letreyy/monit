@@ -70,6 +70,12 @@ class MonitoringService:
     def list_access_audit(self, limit: int = 100) -> list[AccessAuditEntry]:
         return self.storage.list_access_audit(limit=limit)
 
+    def delete_access_audit_older_than(self, min_ts: int) -> int:
+        return self.storage.delete_access_audit_older_than(min_ts=min_ts)
+
+    def delete_worker_history_older_than(self, min_ts_iso: str) -> int:
+        return self.storage.delete_worker_history_older_than(min_ts_iso=min_ts_iso)
+
     def register_event(self, event: Event) -> tuple[Event, bool]:
         if not self.storage.asset_exists(event.asset_id):
             raise KeyError(f"Unknown asset '{event.asset_id}'")

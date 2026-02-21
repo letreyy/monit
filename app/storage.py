@@ -429,6 +429,16 @@ class SQLiteStorage:
             ).fetchall()
         return [AccessAuditEntry(**dict(r)) for r in rows]
 
+    def delete_access_audit_older_than(self, min_ts: int) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM access_audit WHERE ts < ?", (int(min_ts),))
+            return int(cur.rowcount or 0)
+
+    def delete_worker_history_older_than(self, min_ts_iso: str) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM worker_history WHERE ts < ?", (min_ts_iso,))
+            return int(cur.rowcount or 0)
+
     @staticmethod
     def _fingerprint(event: Event) -> str:
         basis = "|".join(

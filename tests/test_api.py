@@ -33,6 +33,18 @@ def setup_function() -> None:
     main_module.AUTH_JWT_LEEWAY_SEC = 30
     main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
     main_module._OIDC_DISCOVERY_CACHE = {"ts": 0.0, "jwks_uri": ""}
+    main_module.ISSUER_ROLE_CLAIM_MAP = {}
+    main_module.ISSUER_SCOPE_CLAIM_MAP = {}
+    main_module.ISSUER_GROUP_CLAIM_MAP = {}
+    main_module.JWT_REJECT_TELEMETRY.clear()
+    main_module.JWT_REJECT_BY_ISSUER_CLIENT.clear()
+    main_module.JWT_REJECT_EVENTS.clear()
+    main_module.COMPLIANCE_REPORTS.clear()
+    main_module.COMPLIANCE_REPORT_DELIVERIES.clear()
+    main_module.COMPLIANCE_LAST_REPORT_TS = 0
+    main_module.COMPLIANCE_WEBHOOK_URL = ""
+    main_module.COMPLIANCE_EMAIL_TO = ""
+    main_module.COMPLIANCE_REPORT_INTERVAL_SEC = 3600
 
 
 client = TestClient(main_module.app)
@@ -1071,6 +1083,12 @@ def test_auth_whoami_accepts_rs256_via_oidc_discovery(monkeypatch: pytest.Monkey
     main_module.AUTH_JWT_ROLE_CLAIM = "role"
     main_module._JWKS_CACHE = {"ts": 0.0, "keys": {}}
     main_module._OIDC_DISCOVERY_CACHE = {"ts": 0.0, "jwks_uri": ""}
+    main_module.ISSUER_ROLE_CLAIM_MAP = {}
+    main_module.ISSUER_SCOPE_CLAIM_MAP = {}
+    main_module.ISSUER_GROUP_CLAIM_MAP = {}
+    main_module.JWT_REJECT_TELEMETRY.clear()
+    main_module.JWT_REJECT_BY_ISSUER_CLIENT.clear()
+    main_module.JWT_REJECT_EVENTS.clear()
 
     payload = {"iss": "issuer-disc", "aud": "aud-disc", "exp": int(time.time()) + 300, "role": "operator"}
     token = _jwt_rs256(payload, private_key, kid="kid-disc")
@@ -1161,6 +1179,97 @@ def test_policy_middleware_forbids_viewer_on_post_events() -> None:
     )
     assert denied.status_code == 403
 
+
+
+
+def test_auth_whoami_issuer_specific_role_claim_mapping() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-custom"
+    main_module.AUTH_JWT_AUDIENCE = "aud-custom"
+    main_module.ISSUER_ROLE_CLAIM_MAP = {"issuer-custom": "custom_role"}
+
+    payload = {"iss": "issuer-custom", "aud": "aud-custom", "exp": int(time.time()) + 300, "custom_role": "admin"}
+    token = _jwt_hs256(payload, secret)
+    resp = client.get("/auth/whoami", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["role"] == "admin"
+
+
+def test_auth_jwt_reject_telemetry_details_endpoint() -> None:
+    secret = "jwt-secret-test"
+    main_module.AUTH_JWT_HS256_SECRET = secret
+    main_module.AUTH_JWT_ISSUER = "issuer-telemetry"
+    main_module.AUTH_JWT_AUDIENCE = "aud-telemetry"
+    main_module.AUTH_JWT_LEEWAY_SEC = 0
+
+    bad = _jwt_hs256({"iss": "issuer-telemetry", "aud": "aud-telemetry", "exp": int(time.time()) - 10, "azp": "cli-1", "role": "admin"}, secret)
+    client.get("/auth/whoami", headers={"Authorization": f"Bearer {bad}"})
+
+    details = client.get("/auth/jwt/reject-telemetry/details?limit=5", headers={"X-Role": "admin"})
+    assert details.status_code == 200
+    rows = details.json()
+    assert isinstance(rows, list)
+    assert len(rows) >= 1
+    assert rows[0]["issuer"] in {"issuer-telemetry", "unknown"}
+
+
+def test_compliance_report_run_and_listing() -> None:
+    denied = client.get("/auth/audit", headers={"X-Role": "viewer"})
+    assert denied.status_code == 403
+
+    run = client.post("/auth/compliance/run", headers={"X-Role": "admin"})
+    assert run.status_code == 200
+    report = run.json()
+    assert report["id"].startswith("cr-")
+    assert "summary" in report
+
+    listing = client.get("/auth/compliance/reports?limit=5", headers={"X-Role": "admin"})
+    assert listing.status_code == 200
+    rows = listing.json()
+    assert len(rows) >= 1
+
+    details = client.get(f"/auth/compliance/reports/{report['id']}", headers={"X-Role": "admin"})
+    assert details.status_code == 200
+    assert details.json()["id"] == report["id"]
+
+    status = client.get("/auth/compliance/status", headers={"X-Role": "admin"})
+    assert status.status_code == 200
+    assert status.json()["reports"] >= 1
+
+
+def test_compliance_purge_and_delivery_routes() -> None:
+    main_module.COMPLIANCE_WEBHOOK_URL = "https://example.local/hook"
+    main_module.COMPLIANCE_EMAIL_TO = "secops@example.local"
+
+    old_ts = int(time.time()) - 100000
+    main_module.service.add_access_audit(
+        main_module.AccessAuditEntry(ts=old_ts, path="/old", role="viewer", action="test", result="allow")
+    )
+
+    main_module.JWT_REJECT_TELEMETRY["expired"] += 2
+    main_module.JWT_REJECT_BY_ISSUER_CLIENT["issuer|client"] += 1
+    main_module.JWT_REJECT_EVENTS.appendleft({"ts": int(time.time()), "reason": "expired", "issuer": "issuer", "client": "client"})
+
+    run = client.post("/auth/compliance/run", headers={"X-Role": "admin"})
+    assert run.status_code == 200
+
+    deliveries = client.get("/auth/compliance/deliveries?limit=5", headers={"X-Role": "admin"})
+    assert deliveries.status_code == 200
+    channels = {d["channel"] for d in deliveries.json()}
+    assert "webhook" in channels
+    assert "email" in channels
+
+    purge = client.post(
+        "/auth/compliance/purge?audit_max_age_sec=1&worker_history_max_age_sec=1&drop_jwt_reject_telemetry=true",
+        headers={"X-Role": "admin"},
+    )
+    assert purge.status_code == 200
+    body = purge.json()
+    assert body["deleted_audit"] >= 1
+    assert body["jwt_reject_telemetry_cleared"] is True
+    assert dict(main_module.JWT_REJECT_TELEMETRY) == {}
 
 def test_worker_sensitive_endpoints_forbid_viewer_header_role() -> None:
     headers = {"X-Role": "viewer"}
@@ -1253,4 +1362,3 @@ def test_worker_diagnostics_data_endpoints() -> None:
 
     trend = client.get("/worker/diagnostics/trend?collector_type=ssh").json()
     assert "points" in trend
-
