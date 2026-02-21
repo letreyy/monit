@@ -1,8 +1,10 @@
 import os
+import json
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 
 from app.models import (
     Alert,
@@ -62,6 +64,64 @@ def home() -> str:
         <li><a href='/docs'>Swagger UI</a></li>
       </ul>
       <p>Now you can manage assets/events via web forms, and configure future agentless collectors.</p>
+
+      <script>
+        (function() {
+          const targetId = encodeURIComponent("{target_id}");
+          const collectorType = encodeURIComponent("{collector_type}");
+          const hasError = encodeURIComponent("{has_error}");
+          const qs = `limit=100&target_id=${targetId}&collector_type=${collectorType}&has_error=${hasError}`;
+
+          async function refreshDiagnostics() {
+            try {
+              const [sumResp, trendResp] = await Promise.all([
+                fetch(`/worker/diagnostics/summary?${qs}`),
+                fetch(`/worker/diagnostics/trend?${qs}`),
+              ]);
+              const summary = await sumResp.json();
+              const trend = await trendResp.json();
+
+              const summaryEl = document.getElementById('diag-summary');
+              summaryEl.innerHTML = `<b>Summary:</b> runs=${summary.runs}, ok=${summary.ok}, errors=${summary.errors}, accepted_events_sum=${summary.accepted_events_sum}`;
+
+              const barsEl = document.getElementById('diag-bars');
+              const byType = summary.by_type || {};
+              const keys = Object.keys(byType);
+              if (!keys.length) {
+                barsEl.innerHTML = '<i>No data for chart</i>';
+              } else {
+                let maxTotal = 1;
+                keys.forEach(k => { const t = (byType[k].ok || 0) + (byType[k].err || 0); if (t > maxTotal) maxTotal = t; });
+                barsEl.innerHTML = keys.sort().map(k => {
+                  const ok = byType[k].ok || 0;
+                  const err = byType[k].err || 0;
+                  const width = Math.floor(((ok + err) / maxTotal) * 240);
+                  const color = err ? '#d9534f' : '#5cb85c';
+                  return `<div><b>${k}</b> ok=${ok} err=${err}<div style='background:#ddd;width:240px;height:12px'><div style='background:${color};width:${width}px;height:12px'></div></div></div>`;
+                }).join('');
+              }
+
+              const trendEl = document.getElementById('diag-trend');
+              const points = (trend.points || []).map((p, i, arr) => {
+                const maxVal = Math.max(...arr.map(x => x.accepted_events), 1);
+                const x = 10 + i * 14;
+                const y = 70 - Math.floor((p.accepted_events / maxVal) * 60);
+                return `${x},${y}`;
+              });
+              if (!points.length) {
+                trendEl.innerHTML = '<i>No trend data</i>';
+              } else {
+                trendEl.innerHTML = `<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'><polyline points='${points.join(' ')}' fill='none' stroke='#337ab7' stroke-width='2' /></svg>`;
+              }
+            } catch (e) {
+              document.getElementById('diag-summary').innerHTML = '<b>Summary:</b> failed to load diagnostics';
+            }
+          }
+
+          refreshDiagnostics();
+          setInterval(refreshDiagnostics, 10000);
+        })();
+      </script>
     </body></html>
     """
 
@@ -364,7 +424,7 @@ def _worker_health_snapshot() -> dict[str, int | str | bool]:
     }
 
 
-def _parse_has_error(has_error: str) -> bool | None:
+def _parse_has_error_filter(has_error: str | None) -> bool | None:
     if has_error == "1":
         return True
     if has_error == "0":
@@ -372,42 +432,42 @@ def _parse_has_error(has_error: str) -> bool | None:
     return None
 
 
-def _worker_history_summary(history: list[dict]) -> dict[str, int]:
+def _build_diagnostics_summary(history: list[dict]) -> dict:
     total = len(history)
     errors = sum(1 for r in history if r.get("last_error"))
-    return {
-        "runs": total,
-        "ok": total - errors,
-        "errors": errors,
-        "accepted_events_sum": sum(int(r.get("accepted_events", 0)) for r in history),
-    }
+    ok = total - errors
+    accepted_sum = sum(int(r.get("accepted_events", 0)) for r in history)
 
-
-def _worker_history_by_type(history: list[dict]) -> list[dict[str, int | str]]:
     by_type: dict[str, dict[str, int]] = {}
     for r in history:
         ctype = str(r.get("collector_type", "unknown"))
-        bucket = by_type.setdefault(ctype, {"ok": 0, "errors": 0})
+        bucket = by_type.setdefault(ctype, {"ok": 0, "err": 0})
         if r.get("last_error"):
-            bucket["errors"] += 1
+            bucket["err"] += 1
         else:
             bucket["ok"] += 1
-    return [
+
+    return {
+        "runs": total,
+        "ok": ok,
+        "errors": errors,
+        "accepted_events_sum": accepted_sum,
+        "by_type": by_type,
+    }
+
+
+def _build_diagnostics_trend(history: list[dict]) -> dict:
+    rows = list(reversed(history))
+    points = [
         {
-            "collector_type": ctype,
-            "ok": values["ok"],
-            "errors": values["errors"],
-            "runs": values["ok"] + values["errors"],
+            "idx": i,
+            "ts": str(r.get("ts", "")),
+            "accepted_events": int(r.get("accepted_events", 0)),
+            "has_error": bool(r.get("last_error")),
         }
-        for ctype, values in sorted(by_type.items())
+        for i, r in enumerate(rows)
     ]
-
-
-def _worker_history_trend(history: list[dict]) -> list[dict[str, int | str]]:
-    return [
-        {"ts": str(r.get("ts", "")), "accepted_events": int(r.get("accepted_events", 0))}
-        for r in history[::-1]
-    ]
+    return {"points": points}
 
 
 @app.get("/worker/health")
@@ -432,32 +492,12 @@ def worker_history(
     )
 
 
-@app.get("/worker/history/summary")
-def worker_history_summary(
-    limit: int = 100,
-    target_id: str | None = None,
-    collector_type: str | None = None,
-    has_error: bool | None = None,
-) -> dict:
-    history = worker.history(
-        limit=limit,
-        target_id=target_id,
-        collector_type=collector_type,
-        has_error=has_error,
-    )
-    return {
-        "summary": _worker_history_summary(history),
-        "by_collector_type": _worker_history_by_type(history),
-        "trend": _worker_history_trend(history),
-    }
-
-
 @app.get("/worker/history.csv", response_class=PlainTextResponse)
 def worker_history_csv(
     limit: int = 200,
     target_id: str | None = None,
     collector_type: str | None = None,
-    has_error: bool | None = None,
+    has_error: str | None = None,
 ) -> str:
     rows = worker.history(
         limit=limit,
@@ -487,13 +527,82 @@ def worker_history_csv(
     return "\n".join(lines)
 
 
+@app.get("/worker/diagnostics/summary")
+def worker_diagnostics_summary(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: str | None = None,
+) -> dict:
+    has_error_value = _parse_has_error_filter(has_error)
+
+    history = worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error_value,
+    )
+    return _build_diagnostics_summary(history)
+
+
+@app.get("/worker/diagnostics/trend")
+def worker_diagnostics_trend(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: str | None = None,
+) -> dict:
+    has_error_value = _parse_has_error_filter(has_error)
+
+    history = worker.history(
+        limit=limit,
+        target_id=target_id,
+        collector_type=collector_type,
+        has_error=has_error_value,
+    )
+    return _build_diagnostics_trend(history)
+
+
+@app.get("/worker/diagnostics/stream")
+async def worker_diagnostics_stream(
+    limit: int = 100,
+    target_id: str | None = None,
+    collector_type: str | None = None,
+    has_error: str | None = None,
+    tick_sec: float = 3.0,
+    max_events: int | None = None,
+) -> StreamingResponse:
+    has_error_value = _parse_has_error_filter(has_error)
+
+    async def event_stream():
+        sent = 0
+        while True:
+            history = worker.history(
+                limit=limit,
+                target_id=target_id,
+                collector_type=collector_type,
+                has_error=has_error_value,
+            )
+            payload = {
+                "summary": _build_diagnostics_summary(history),
+                "trend": _build_diagnostics_trend(history),
+            }
+            yield f"event: diagnostics\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+            sent += 1
+            if max_events is not None and sent >= max_events:
+                break
+            await asyncio.sleep(max(tick_sec, 1.0))
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.get("/ui/diagnostics", response_class=HTMLResponse)
 def ui_diagnostics(
     target_id: str = "",
     collector_type: str = "",
     has_error: str = "",
 ) -> str:
-    has_error_value = _parse_has_error(has_error)
+    has_error_value = _parse_has_error_filter(has_error)
 
     history = worker.history(
         limit=100,
@@ -509,49 +618,19 @@ def ui_diagnostics(
             f"<td>{row.get('last_error') or '-'}</td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='7'>No worker history yet</td></tr>"
-
-    summary = _worker_history_summary(history)
-
-    by_type = _worker_history_by_type(history)
-
-    bars = []
-    max_total = max((int(v["runs"]) for v in by_type), default=1)
-    for v in by_type:
-        ctype = str(v["collector_type"])
-        width = int((int(v["runs"]) / max_total) * 240)
-        bars.append(
-            f"<div><b>{ctype}</b> ok={v['ok']} err={v['errors']}<div style='background:#ddd;width:240px;height:12px'>"
-            f"<div style='background:{'#d9534f' if v['errors'] else '#5cb85c'};width:{width}px;height:12px'></div></div></div>"
-        )
-    bars_html = "".join(bars) or "<i>No data for chart</i>"
-
-    trend_points = []
-    trend_values = [int(r["accepted_events"]) for r in _worker_history_trend(history)]
-    max_val = max(trend_values, default=1)
-    for i, val in enumerate(trend_values):
-        x = 10 + i * 14
-        y = 70 - int((val / max_val) * 60) if max_val else 70
-        trend_points.append(f"{x},{y}")
-    poly = " ".join(trend_points)
-    trend_svg = (
-        f"<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'>"
-        f"<polyline points='{poly}' fill='none' stroke='#337ab7' stroke-width='2' />"
-        f"</svg>"
-        if trend_points
-        else "<i>No trend data</i>"
-    )
+    qs = f"limit=100&target_id={target_id}&collector_type={collector_type}&has_error={has_error}"
 
     return f"""
     <html><body style='font-family: Arial; max-width: 1200px; margin: 2rem auto;'>
       <h1>Worker diagnostics</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/worker/health'>JSON health</a> | <a href='/worker/history'>JSON history</a> | <a href='/worker/history.csv'>CSV export</a></p>
-      <div style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
-        <b>Summary:</b> runs={summary['runs']}, ok={summary['ok']}, errors={summary['errors']}, accepted_events_sum={summary['accepted_events_sum']}
+      <div id='diag-summary' style='padding:10px;border:1px solid #ccc;background:#f8f8f8;margin:10px 0'>
+        <b>Summary:</b> loading...
       </div>
       <h3>Errors by collector type</h3>
-      {bars_html}
+      <div id='diag-bars'><i>Loading chart...</i></div>
       <h3>Accepted events trend</h3>
-      {trend_svg}
+      <div id='diag-trend'><i>Loading trend...</i></div>
       <form method='get' action='/ui/diagnostics' style='margin: 10px 0;'>
         <label>Target ID <input name='target_id' value='{target_id}' /></label>
         <label>Type
@@ -576,6 +655,93 @@ def ui_diagnostics(
         <thead><tr><th>TS</th><th>Target</th><th>Type</th><th>Accepted events</th><th>Failure streak</th><th>Cursor</th><th>Last error</th></tr></thead>
         <tbody>{rows_html}</tbody>
       </table>
+      <script>
+        (function() {{
+          const rawQs = "{qs}";
+          const params = new URLSearchParams(rawQs);
+          if (!params.get('target_id')) params.delete('target_id');
+          if (!params.get('collector_type')) params.delete('collector_type');
+          if (!params.get('has_error')) params.delete('has_error');
+          const qs = params.toString();
+          function renderDiagnostics(summary, trend) {{
+            const s = document.getElementById('diag-summary');
+            s.innerHTML = `<b>Summary:</b> runs=${{summary.runs}}, ok=${{summary.ok}}, errors=${{summary.errors}}, accepted_events_sum=${{summary.accepted_events_sum}}`;
+
+            const bars = document.getElementById('diag-bars');
+            const byType = summary.by_type || {{}};
+            const keys = Object.keys(byType);
+            if (!keys.length) {{
+              bars.innerHTML = '<i>No data for chart</i>';
+            }} else {{
+              let maxTotal = 1;
+              for (const k of keys) {{
+                const t = (byType[k].ok || 0) + (byType[k].err || 0);
+                if (t > maxTotal) maxTotal = t;
+              }}
+              bars.innerHTML = keys.sort().map((k) => {{
+                const ok = byType[k].ok || 0;
+                const err = byType[k].err || 0;
+                const width = Math.floor(((ok + err) / maxTotal) * 240);
+                const color = err > 0 ? '#d9534f' : '#5cb85c';
+                return `<div><b>${{k}}</b> ok=${{ok}} err=${{err}}<div style='background:#ddd;width:240px;height:12px'><div style='background:${{color}};width:${{width}}px;height:12px'></div></div></div>`;
+              }}).join('');
+            }}
+
+            const trendEl = document.getElementById('diag-trend');
+            const points = trend.points || [];
+            if (!points.length) {{
+              trendEl.innerHTML = '<i>No trend data</i>';
+            }} else {{
+              const maxVal = Math.max(...points.map(p => p.accepted_events), 1);
+              const polyPoints = points.map((p, i) => {{
+                const x = 10 + i * 14;
+                const y = 70 - Math.floor((p.accepted_events / maxVal) * 60);
+                return `${{x}},${{y}}`;
+              }}).join(' ');
+              trendEl.innerHTML = `<svg width='760' height='90' style='border:1px solid #ddd;background:#fff'><polyline points='${{polyPoints}}' fill='none' stroke='#337ab7' stroke-width='2' /></svg>`;
+            }}
+          }}
+
+          async function refreshDiagnostics() {{
+            try {{
+              const [summaryResp, trendResp] = await Promise.all([
+                fetch('/worker/diagnostics/summary?' + qs),
+                fetch('/worker/diagnostics/trend?' + qs)
+              ]);
+              const summary = await summaryResp.json();
+              const trend = await trendResp.json();
+              renderDiagnostics(summary, trend);
+            }} catch (e) {{
+              document.getElementById('diag-summary').innerHTML = '<b>Summary:</b> failed to load diagnostics';
+            }}
+          }}
+
+          function startSSE() {{
+            const sse = new EventSource('/worker/diagnostics/stream?' + qs);
+            sse.addEventListener('diagnostics', (evt) => {{
+              try {{
+                const payload = JSON.parse(evt.data);
+                renderDiagnostics(payload.summary || {{}}, payload.trend || {{ points: [] }});
+              }} catch (err) {{
+                console.error('SSE parse error', err);
+              }}
+            }});
+            sse.onerror = () => {{
+              sse.close();
+              refreshDiagnostics();
+              setInterval(refreshDiagnostics, 10000);
+            }};
+          }}
+
+          if (window.EventSource) {{
+            startSSE();
+          }} else {{
+            refreshDiagnostics();
+            setInterval(refreshDiagnostics, 10000);
+          }}
+        }})();
+      </script>
+
     </body></html>
     """
 
@@ -584,133 +750,37 @@ def ui_diagnostics(
 def dashboard() -> str:
     overview_data = service.overview()
     worker_health_data = _worker_health_snapshot()
-
-    assets = service.list_assets()
-    severity_counts = {"info": 0, "warning": 0, "critical": 0}
-    asset_rows = []
-    recent_alerts: list[str] = []
-
-    for asset in assets:
-        events = service.list_events(asset.id)
-        alerts = service.build_alerts(asset.id)
+    rows = []
+    for asset in service.list_assets():
+        alerts_count = len(service.build_alerts(asset.id))
         insights_count = len(service.build_correlation_insights(asset.id))
-
-        for event in events:
-            severity_counts[event.severity.value] += 1
-        recent_alerts.extend([f"{asset.name}: {a.reason}" for a in alerts])
-
-        asset_rows.append(
-            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td><td>{asset.asset_type.value}</td>"
-            f"<td>{asset.location or '-'}</td><td>{len(events)}</td><td>{len(alerts)}</td><td>{insights_count}</td></tr>"
+        events_count = len(service.list_events(asset.id))
+        rows.append(
+            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
+            f"<td>{events_count}</td><td>{alerts_count}</td><td>{insights_count}</td></tr>"
         )
 
-    events_total = max(overview_data["events_total"], 1)
-    info_pct = int(severity_counts["info"] * 100 / events_total)
-    warn_pct = int(severity_counts["warning"] * 100 / events_total)
-    crit_pct = max(0, 100 - info_pct - warn_pct)
-    trend_points = "30,90 120,45 210,55 300,25 390,35 480,20"
-
-    alerts_html = "".join(f"<li>{alert}</li>" for alert in recent_alerts[:7]) or "<li>No alerts yet</li>"
-    rows_html = "".join(asset_rows) if asset_rows else "<tr><td colspan='7'>No assets yet</td></tr>"
-
+    rows_html = "".join(rows) if rows else "<tr><td colspan='6'>No assets yet</td></tr>"
     return f"""
-    <html>
-      <body style='margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:#eef2f6;color:#18202a;'>
-        <div style='display:flex;min-height:100vh;'>
-          <aside style='width:86px;background:#273543;color:#fff;padding:14px 10px;'>
-            <div style='font-weight:700;font-size:20px;text-align:center;margin:8px 0 24px;'>IM</div>
-            <div style='padding:10px 8px;border-left:3px solid #87d04a;background:#324657;border-radius:4px;margin-bottom:8px;'>Overview</div>
-            <div style='padding:10px 8px;opacity:.85;'>Assets</div>
-            <div style='padding:10px 8px;opacity:.85;'>Alerts</div>
-            <div style='padding:10px 8px;opacity:.85;'>Collectors</div>
-          </aside>
-
-          <main style='flex:1;'>
-            <header style='background:#374957;color:#fff;padding:14px 22px;display:flex;justify-content:space-between;align-items:center;'>
-              <div style='display:flex;gap:20px;font-weight:600;'>
-                <span>Dashboard</span><span style='opacity:.8;'>Reports</span><span style='opacity:.8;'>Security</span><span style='opacity:.8;'>Settings</span>
-              </div>
-              <div style='font-size:14px;opacity:.9;'>InfraMind Monitor</div>
-            </header>
-
-            <section style='padding:18px;'>
-              <div style='display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-bottom:14px;'>
-                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>All Events</div><div style='font-size:34px;font-weight:700;'>{overview_data['events_total']}</div><div style='font-size:13px;color:#2f9d44;'>info {severity_counts['info']} · warn {severity_counts['warning']} · crit {severity_counts['critical']}</div></div>
-                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Assets</div><div style='font-size:34px;font-weight:700;'>{overview_data['assets_total']}</div><div style='font-size:13px;color:#5b6c7d;'>critical assets: {overview_data['critical_assets']}</div></div>
-                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Worker</div><div style='font-size:34px;font-weight:700;'>{'OK' if worker_health_data['running'] else 'DOWN'}</div><div style='font-size:13px;color:#5b6c7d;'>tracked {worker_health_data['tracked']} · failed {worker_health_data['failed']}</div></div>
-                <div style='background:#fff;border:1px solid #dbe3ec;padding:14px;border-radius:8px;'><div style='color:#6f7f91;font-size:13px;'>Collectors</div><div style='font-size:34px;font-weight:700;'>{len(service.list_collector_targets())}</div><div style='font-size:13px;color:#5b6c7d;'>cycles {worker_health_data['cycle_count']}</div></div>
-              </div>
-
-              <div style='display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-bottom:12px;'>
-                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
-                  <h3 style='margin:0 0 8px;'>Logs Trend</h3>
-                  <svg viewBox='0 0 520 110' style='width:100%;height:140px;background:#f7fbff;border:1px solid #e3ebf3;border-radius:6px;'>
-                    <polyline points='{trend_points}' fill='rgba(40,141,205,0.18)' stroke='#1c8ece' stroke-width='3'></polyline>
-                  </svg>
-                </div>
-                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
-                  <h3 style='margin:0 0 8px;'>Severity Mix</h3>
-                  <div style='height:12px;background:#eaf0f7;border-radius:999px;overflow:hidden;display:flex;'>
-                    <div style='width:{info_pct}%;background:#1a8fcf;'></div>
-                    <div style='width:{warn_pct}%;background:#f59d1a;'></div>
-                    <div style='width:{crit_pct}%;background:#ef4f4f;'></div>
-                  </div>
-                  <p style='font-size:13px;color:#5b6c7d;'>Info {info_pct}% · Warning {warn_pct}% · Critical {crit_pct}%</p>
-                  <p style='margin:0;font-size:13px;' id='worker-health-widget'><b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'} · tracked {worker_health_data['tracked']} · failed {worker_health_data['failed']} · cycles {worker_health_data['cycle_count']} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a></p>
-                </div>
-              </div>
-
-              <div style='display:grid;grid-template-columns:2fr 1fr;gap:12px;'>
-                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
-                  <h3 style='margin:0 0 10px;'>Assets Matrix</h3>
-                  <table style='width:100%;border-collapse:collapse;font-size:14px;'>
-                    <thead>
-                      <tr style='text-align:left;background:#f5f8fc;'>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>ID</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Name</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Type</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Location</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Events</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Alerts</th>
-                        <th style='padding:8px;border-bottom:1px solid #e0e8f0;'>Insights</th>
-                      </tr>
-                    </thead>
-                    <tbody>{rows_html}</tbody>
-                  </table>
-                </div>
-                <div style='background:#fff;border:1px solid #dbe3ec;border-radius:8px;padding:14px;'>
-                  <h3 style='margin:0 0 10px;'>Recent Alerts</h3>
-                  <ul style='margin:0;padding-left:18px;display:grid;gap:8px;font-size:14px;line-height:1.3;'>{alerts_html}</ul>
-                  <hr style='border:none;border-top:1px solid #e6edf5;margin:12px 0;'>
-                  <div style='display:grid;gap:6px;font-size:13px;'>
-                    <a href='/ui/assets'>Manage assets</a>
-                    <a href='/ui/events'>Send event</a>
-                    <a href='/ui/collectors'>Collector targets</a>
-                    <a href='/worker/targets'>Worker targets</a>
-                  </div>
-                </div>
-              </div>
-            </section>
-          </main>
-        </div>
-        <script>
-          async function refreshWorkerHealthWidget() {{
-            try {{
-              const resp = await fetch('/worker/health');
-              if (!resp.ok) return;
-              const payload = await resp.json();
-              const widget = document.getElementById('worker-health-widget');
-              if (!widget) return;
-              const state = payload.running ? 'running' : 'stopped';
-              widget.innerHTML = `<b>Worker health:</b> ${{state}} · tracked ${{payload.tracked}} · failed ${{payload.failed}} · cycles ${{payload.cycle_count}} · <a href='/worker/health'>Worker health JSON</a> · <a href='/ui/diagnostics'>Diagnostics</a>`;
-            }} catch (_e) {{
-              // ignore widget refresh errors to keep dashboard stable
-            }}
-          }}
-          setInterval(refreshWorkerHealthWidget, 5000);
-        </script>
-      </body>
-    </html>
+    <html><body style='font-family: Arial; max-width: 1100px; margin: 2rem auto;'>
+      <h1>InfraMind Dashboard</h1>
+      <p><a href='/ui/assets'>Add/List assets</a> | <a href='/ui/events'>Add event</a> | <a href='/ui/collectors'>Agentless collectors</a> | <a href='/worker/status'>Worker status</a> | <a href='/worker/targets'>Worker targets</a> | <a href='/ui/diagnostics'>Worker diagnostics</a></p>
+      <p>Assets: <b>{overview_data['assets_total']}</b> | Events: <b>{overview_data['events_total']}</b> |
+      Critical assets: <b>{overview_data['critical_assets']}</b></p>
+      <div style='padding: 12px; border: 1px solid #ccc; margin: 12px 0; background: #f9f9f9;'>
+        <b>Worker health:</b> {'running' if worker_health_data['running'] else 'stopped'}
+        | enabled: {worker_health_data['enabled']}
+        | tracked: {worker_health_data['tracked']}
+        | failed: {worker_health_data['failed']}
+        | stale: {worker_health_data['stale']}
+        | cycles: {worker_health_data['cycle_count']}
+        | <a href='/worker/health'>JSON</a>
+      </div>
+      <table border='1' cellpadding='8' cellspacing='0'>
+        <thead><tr><th>Asset</th><th>Type</th><th>Location</th><th>Events</th><th>Alerts</th><th>Insights</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </body></html>
     """
 
 

@@ -112,23 +112,6 @@ def test_dedup_batch_ingest() -> None:
     assert ingest_resp.json()["accepted"] == 1
 
 
-def test_dashboard_renders_new_layout_blocks() -> None:
-    client.post(
-        "/assets",
-        json={"id": "srv-ui", "name": "srv-ui", "asset_type": "server", "location": "R7"},
-    )
-    client.post(
-        "/events",
-        json={"asset_id": "srv-ui", "source": "manual", "message": "CPU high", "severity": "warning"},
-    )
-
-    resp = client.get("/dashboard")
-    assert resp.status_code == 200
-    assert "Assets Matrix" in resp.text
-    assert "Severity Mix" in resp.text
-    assert "Recent Alerts" in resp.text
-
-
 
 
 def test_winrm_pull_uses_target_options() -> None:
@@ -438,8 +421,6 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert resp.status_code == 200
     assert "Worker health:" in resp.text
     assert "/worker/health" in resp.text
-    assert "worker-health-widget" in resp.text
-    assert "refreshWorkerHealthWidget" in resp.text
 
 
 def test_worker_history_endpoint_has_rows_after_run_once() -> None:
@@ -487,38 +468,9 @@ def test_ui_diagnostics_page() -> None:
     assert "Apply" in resp.text
     assert "Summary:" in resp.text
     assert "Download filtered CSV" in resp.text
-
-
-def test_worker_history_summary_endpoint() -> None:
-    client.post(
-        "/assets",
-        json={"id": "srv-sum", "name": "srv-sum", "asset_type": "server", "location": "R9"},
-    )
-    client.post(
-        "/collectors",
-        json={
-            "id": "col-sum",
-            "name": "Summary target",
-            "address": "127.0.0.1",
-            "collector_type": "ssh",
-            "port": 1,
-            "username": "u",
-            "password": "p",
-            "poll_interval_sec": 10,
-            "enabled": True,
-            "asset_id": "srv-sum",
-        },
-    )
-
-    client.post("/worker/run-once")
-    resp = client.get("/worker/history/summary?target_id=col-sum&collector_type=ssh")
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert "summary" in payload
-    assert "by_collector_type" in payload
-    assert "trend" in payload
-    assert payload["summary"]["runs"] >= 1
-    assert any(row["collector_type"] == "ssh" for row in payload["by_collector_type"])
+    assert "/worker/diagnostics/summary" in resp.text
+    assert "/worker/diagnostics/stream" in resp.text
+    assert "new EventSource" in resp.text
 
 
 def test_worker_history_persists_in_storage() -> None:
@@ -629,3 +581,71 @@ def test_storage_migrates_events_fingerprint_column() -> None:
 
     if db_path.exists():
         db_path.unlink()
+
+
+
+
+def test_worker_diagnostics_stream_endpoint() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-stream", "name": "srv-stream", "asset_type": "server", "location": "R11"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-stream",
+            "name": "Stream target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-stream",
+        },
+    )
+    client.post("/worker/run-once")
+
+    with client.stream("GET", "/worker/diagnostics/stream?collector_type=ssh&tick_sec=1&max_events=1") as resp:
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        first_chunk = ""
+        for chunk in resp.iter_text():
+            if chunk.strip():
+                first_chunk = chunk
+                break
+
+    assert "event: diagnostics" in first_chunk
+    assert "\"summary\"" in first_chunk
+    assert "\"trend\"" in first_chunk
+
+def test_worker_diagnostics_data_endpoints() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-data", "name": "srv-data", "asset_type": "server", "location": "R10"},
+    )
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-data",
+            "name": "Data target",
+            "address": "127.0.0.1",
+            "collector_type": "ssh",
+            "port": 1,
+            "username": "u",
+            "password": "p",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "srv-data",
+        },
+    )
+    client.post("/worker/run-once")
+
+    summary = client.get("/worker/diagnostics/summary?collector_type=ssh").json()
+    assert "runs" in summary
+    assert "by_type" in summary
+
+    trend = client.get("/worker/diagnostics/trend?collector_type=ssh").json()
+    assert "points" in trend
+

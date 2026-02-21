@@ -633,3 +633,29 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 ### Что дальше по плану
 
 Следующий шаг: вынести diagnostics view на отдельные data endpoints для фронтенда (JSON агрегации/таймсерии) и добавить автообновление виджета без перезагрузки страницы.
+
+## Следующий шаг (реализовано): data endpoints + автообновление diagnostics
+
+Сделали следующий шаг roadmap:
+
+- добавлены отдельные data endpoint'ы для фронтенд-виджета diagnostics:
+  - `GET /worker/diagnostics/summary`
+  - `GET /worker/diagnostics/trend`
+- `GET /ui/diagnostics` теперь использует JS автообновление (poll каждые 10 секунд) без перезагрузки страницы;
+- summary/charts на странице обновляются из этих endpoint'ов, а таблица и CSV-фильтры остаются совместимыми с текущим workflow.
+
+### Что дальше по плану
+
+Следующий шаг: перейти от polling к server-push (SSE/WebSocket) для near-real-time обновления diagnostics и вынести визуализацию в более структурированный фронтенд-компонент.
+
+## Следующий шаг (реализовано): server-push diagnostics через SSE
+
+Сделали следующий шаг roadmap:
+
+- добавлен endpoint `GET /worker/diagnostics/stream` (SSE), который пушит `summary + trend` по тем же фильтрам (`target_id`, `collector_type`, `has_error`);
+- `GET /ui/diagnostics` теперь подписывается на SSE для near-real-time обновления карточки summary и графиков;
+- добавлен fallback на polling (`/worker/diagnostics/summary` и `/worker/diagnostics/trend`) если `EventSource` недоступен или SSE-соединение оборвалось.
+
+### Что дальше по плану
+
+Следующий шаг: выделить diagnostics UI в более структурированный фронтенд-компонент (с отдельным JS-модулем и переиспользуемыми функциями рендера), чтобы упростить развитие визуализации и дальнейшие real-time виджеты.
