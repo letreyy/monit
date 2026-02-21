@@ -1458,3 +1458,64 @@ def test_ai_log_analytics_honors_top_limits() -> None:
     assert len(data["anomalies"]) <= 1
     if data["clusters"]:
         assert data["clusters"][0]["cluster_id"].startswith("cl-")
+
+
+def test_ai_log_analytics_ignore_filters() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-ai-filter", "name": "srv-ai-filter", "asset_type": "server", "location": "R12"},
+    )
+
+    events = []
+    for i in range(8):
+        events.append(
+            {
+                "asset_id": "srv-ai-filter",
+                "source": "linux",
+                "message": f"service timeout code={500 + i}",
+                "severity": "warning",
+            }
+        )
+    for i in range(5):
+        events.append(
+            {
+                "asset_id": "srv-ai-filter",
+                "source": "windows_eventlog",
+                "message": f"EventID=4625 user=ops host=10.10.0.{i+1}",
+                "severity": "warning",
+            }
+        )
+
+    ingest_resp = client.post("/ingest/events", json={"events": events})
+    assert ingest_resp.status_code == 200
+
+    full_resp = client.get("/assets/srv-ai-filter/ai-log-analytics?limit=200")
+    assert full_resp.status_code == 200
+    full_data = full_resp.json()
+    assert any(item["source"] == "linux" for item in full_data["clusters"])
+
+    filtered_resp = client.get("/assets/srv-ai-filter/ai-log-analytics?limit=200&ignore_sources=linux")
+    assert filtered_resp.status_code == 200
+    filtered_data = filtered_resp.json()
+    assert all(item["source"] != "linux" for item in filtered_data["clusters"])
+    assert any("Исключено ignore-правилами" in line for line in filtered_data["summary"])
+
+
+def test_ai_log_analytics_ignore_signature() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-ai-sign", "name": "srv-ai-sign", "asset_type": "server", "location": "R13"},
+    )
+
+    events = [
+        {"asset_id": "srv-ai-sign", "source": "linux", "message": f"service timeout code={500 + i}", "severity": "warning"}
+        for i in range(6)
+    ]
+    client.post("/ingest/events", json={"events": events})
+
+    sig = "service timeout code=<num>"
+    resp = client.get("/assets/srv-ai-sign/ai-log-analytics", params={"ignore_signatures": sig})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["analyzed_events"] == 0
+    assert data["clusters"] == []

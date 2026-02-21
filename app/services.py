@@ -135,9 +135,15 @@ class MonitoringService:
         limit: int = 300,
         max_clusters: int = 30,
         max_anomalies: int = 20,
+        ignore_sources: set[str] | None = None,
+        ignore_signatures: set[str] | None = None,
     ) -> LogAnalyticsInsight:
         if not self.storage.asset_exists(asset_id):
             raise KeyError(f"Unknown asset '{asset_id}'")
+
+        ignore_sources = {item.strip().lower() for item in (ignore_sources or set()) if item.strip()}
+        ignore_signatures = {item.strip().lower() for item in (ignore_signatures or set()) if item.strip()}
+
         events = self.list_events(asset_id, limit=limit)
         if not events:
             return LogAnalyticsInsight(
@@ -149,9 +155,30 @@ class MonitoringService:
             )
 
         ordered_events = list(reversed(events))
-        total = len(ordered_events)
-        grouped: dict[tuple[str, str], list[Event]] = defaultdict(list)
+        total_before_filters = len(ordered_events)
+        filtered_events: list[Event] = []
+        filtered_out = 0
         for event in ordered_events:
+            signature = self._message_signature(event.message)
+            if event.source.lower() in ignore_sources or signature in ignore_signatures:
+                filtered_out += 1
+                continue
+            filtered_events.append(event)
+
+        if not filtered_events:
+            return LogAnalyticsInsight(
+                asset_id=asset_id,
+                analyzed_events=0,
+                clusters=[],
+                anomalies=[],
+                summary=[
+                    f"Все события отфильтрованы ignore-правилами (исключено {filtered_out} из {total_before_filters}).",
+                ],
+            )
+
+        total = len(filtered_events)
+        grouped: dict[tuple[str, str], list[Event]] = defaultdict(list)
+        for event in filtered_events:
             signature = self._message_signature(event.message)
             grouped[(event.source, signature)].append(event)
 
@@ -209,10 +236,15 @@ class MonitoringService:
 
         recent_window = min(max(10, total // 3), total)
         if total > recent_window:
-            older = ordered_events[:-recent_window]
-            recent = ordered_events[-recent_window:]
+            older = filtered_events[:-recent_window]
+            recent = filtered_events[-recent_window:]
             older_counts: Counter[tuple[str, str]] = Counter((e.source, self._message_signature(e.message)) for e in older)
             recent_counts: Counter[tuple[str, str]] = Counter((e.source, self._message_signature(e.message)) for e in recent)
+            older_hour_totals: Counter[int] = Counter(e.timestamp.hour for e in older)
+            older_hour_cluster_counts: Counter[tuple[int, tuple[str, str]]] = Counter(
+                (e.timestamp.hour, (e.source, self._message_signature(e.message))) for e in older
+            )
+
             for key, recent_count in recent_counts.items():
                 cluster = cluster_lookup.get(key)
                 if cluster is None:
@@ -220,8 +252,16 @@ class MonitoringService:
                 older_count = older_counts.get(key, 0)
                 recent_rate = recent_count / len(recent)
                 older_rate = older_count / len(older) if older else 0.0
+
+                recent_rows_for_key = [e for e in recent if (e.source, self._message_signature(e.message)) == key]
+                recent_hour = recent_rows_for_key[-1].timestamp.hour if recent_rows_for_key else None
+                hourly_baseline_rate = older_rate
+                if recent_hour is not None and older_hour_totals.get(recent_hour, 0) > 0:
+                    hour_cluster_count = older_hour_cluster_counts.get((recent_hour, key), 0)
+                    hourly_baseline_rate = hour_cluster_count / older_hour_totals[recent_hour]
+
                 has_critical = cluster.severity_mix.get(Severity.critical.value, 0) > 0
-                if recent_count >= 3 and recent_rate >= 0.4 and older_rate <= 0.1:
+                if recent_count >= 3 and recent_rate >= 0.4 and older_rate <= 0.2 and hourly_baseline_rate <= 0.15:
                     anomaly_key = ("burst_pattern", cluster.cluster_id, None)
                     if anomaly_key in seen_anomaly_keys:
                         continue
@@ -233,16 +273,17 @@ class MonitoringService:
                             confidence=0.86 if has_critical else 0.8,
                             reason="В последних событиях обнаружен всплеск повторяющегося паттерна.",
                             evidence=[
-                                "Правило: recent_count>=3, recent_rate>=40%, historical_rate<=10%.",
+                                "Правило: recent_count>=3, recent_rate>=40%, historical_rate<=20%, hourly_baseline<=15%.",
                                 f"Кластер {cluster.cluster_id}: recent={recent_count}/{len(recent)} ({recent_rate:.0%}).",
                                 f"Историческая доля: {older_count}/{len(older)} ({older_rate:.0%}).",
+                                f"Часовой baseline (hour={recent_hour}): {hourly_baseline_rate:.0%}.",
                             ],
                             related_cluster_id=cluster.cluster_id,
                         )
                     )
 
         metric_values: dict[str, list[float]] = defaultdict(list)
-        for event in ordered_events:
+        for event in filtered_events:
             if event.metric and event.value is not None:
                 metric_values[event.metric].append(event.value)
 
@@ -283,6 +324,8 @@ class MonitoringService:
             f"Найдено кластеров: {len(clusters)} (показано top={max_clusters})",
             f"Обнаружено аномалий: {len(anomalies)} (показано top={max_anomalies})",
         ]
+        if filtered_out:
+            summary.append(f"Исключено ignore-правилами: {filtered_out} из {total_before_filters}.")
         if anomalies:
             summary.append(f"Топ-причина: {anomalies[0].reason}")
 

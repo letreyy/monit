@@ -2153,6 +2153,8 @@ def get_ai_log_analytics(
     limit: int = 300,
     max_clusters: int = 30,
     max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
     tenant_id: str | None = None,
 ) -> LogAnalyticsInsight:
     if not _asset_exists(asset_id):
@@ -2161,11 +2163,15 @@ def get_ai_log_analytics(
     if not _asset_in_tenant(asset_id, tenant_scope):
         raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     try:
+        parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+        parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
         return service.build_log_analytics(
             asset_id,
             limit=min(max(limit, 20), 2000),
             max_clusters=min(max(max_clusters, 5), 100),
             max_anomalies=min(max(max_anomalies, 1), 100),
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

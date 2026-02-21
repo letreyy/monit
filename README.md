@@ -169,7 +169,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 - `POST /events`
 - `GET /assets/{asset_id}/events`
 - `GET /assets/{asset_id}/recommendation`
-- `GET /assets/{asset_id}/ai-log-analytics` (query: `limit`, `max_clusters`, `max_anomalies`)
+- `GET /assets/{asset_id}/ai-log-analytics` (query: `limit`, `max_clusters`, `max_anomalies`, `ignore_sources`, `ignore_signatures`)
 
 ## Интерфейс и автосбор данных
 
