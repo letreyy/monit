@@ -609,6 +609,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows_eventlog_agent.ps1 -A
 Сделали следующий шаг из плана:
 
 - история worker теперь сохраняется в SQLite (`worker_history`), а не только в памяти;
+- добавлена миграционная совместимость для старых БД без `events.fingerprint` (авто-добавление колонки при старте);
 - `GET /worker/history` поддерживает фильтры: `target_id`, `collector_type`, `has_error`;
 - `GET /ui/diagnostics` получил фильтры по target/type/error и работает поверх persisted history.
 

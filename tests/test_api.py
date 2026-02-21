@@ -532,3 +532,49 @@ def test_worker_history_csv_export() -> None:
     assert "ts,target_id,collector_type,accepted_events" in csv_resp.text
     assert "\"col-csv\"" in csv_resp.text
 
+
+
+def test_storage_migrates_events_fingerprint_column() -> None:
+    db_path = Path("data/test_migration.db")
+    if db_path.exists():
+        db_path.unlink()
+
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            asset_id TEXT NOT NULL,
+            source TEXT NOT NULL,
+            message TEXT NOT NULL,
+            metric TEXT,
+            value REAL,
+            severity TEXT NOT NULL,
+            timestamp TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE assets (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            location TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    storage = SQLiteStorage(str(db_path))
+
+    with storage._connect() as check:  # noqa: SLF001
+        cols = [row["name"] for row in check.execute("PRAGMA table_info(events)").fetchall()]
+
+    assert "fingerprint" in cols
+
+    if db_path.exists():
+        db_path.unlink()

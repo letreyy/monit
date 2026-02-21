@@ -105,6 +105,7 @@ class SQLiteStorage:
                 )
                 """
             )
+            self._ensure_events_columns(conn)
             conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_events_fingerprint ON events(fingerprint)
@@ -116,6 +117,11 @@ class SQLiteStorage:
                 """
             )
             self._ensure_collector_target_columns(conn)
+
+    def _ensure_events_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+        if "fingerprint" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN fingerprint TEXT")
 
     def _ensure_collector_target_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(collector_targets)").fetchall()}
