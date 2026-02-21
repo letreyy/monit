@@ -1,4 +1,7 @@
+import hashlib
 import re
+import statistics
+from collections import Counter, defaultdict
 
 from app.models import (
     AccessAuditEntry,
@@ -8,6 +11,9 @@ from app.models import (
     CollectorTarget,
     CorrelationInsight,
     Event,
+    LogAnalyticsInsight,
+    LogAnomaly,
+    LogCluster,
     Recommendation,
     Severity,
     WorkerHistoryEntry,
@@ -106,6 +112,187 @@ class MonitoringService:
             alerts.append(Alert(asset_id=asset_id, severity=Severity.critical, reason="SMART degradation"))
 
         return alerts
+
+    @staticmethod
+    def _message_signature(message: str) -> str:
+        normalized = message.lower()
+        normalized = re.sub(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", "<ip>", normalized)
+        normalized = re.sub(r"\b0x[0-9a-f]+\b", "<hex>", normalized)
+        normalized = re.sub(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<guid>", normalized)
+        normalized = re.sub(r"\b\d+\b", "<num>", normalized)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized[:200]
+
+    @staticmethod
+    def _cluster_id(source: str, signature: str) -> str:
+        source_part = re.sub(r"[^a-z0-9]", "", source.lower())[:6] or "src"
+        hash_part = hashlib.sha1(f"{source}|{signature}".encode("utf-8")).hexdigest()[:8]
+        return f"cl-{source_part}-{hash_part}"
+
+    def build_log_analytics(
+        self,
+        asset_id: str,
+        limit: int = 300,
+        max_clusters: int = 30,
+        max_anomalies: int = 20,
+    ) -> LogAnalyticsInsight:
+        if not self.storage.asset_exists(asset_id):
+            raise KeyError(f"Unknown asset '{asset_id}'")
+        events = self.list_events(asset_id, limit=limit)
+        if not events:
+            return LogAnalyticsInsight(
+                asset_id=asset_id,
+                analyzed_events=0,
+                clusters=[],
+                anomalies=[],
+                summary=["Недостаточно данных для анализа логов."],
+            )
+
+        ordered_events = list(reversed(events))
+        total = len(ordered_events)
+        grouped: dict[tuple[str, str], list[Event]] = defaultdict(list)
+        for event in ordered_events:
+            signature = self._message_signature(event.message)
+            grouped[(event.source, signature)].append(event)
+
+        cluster_pairs = sorted(grouped.items(), key=lambda item: len(item[1]), reverse=True)
+        clusters: list[LogCluster] = []
+        for (source, signature), rows in cluster_pairs[:max_clusters]:
+            severity_mix = dict(Counter(e.severity.value for e in rows))
+            clusters.append(
+                LogCluster(
+                    cluster_id=self._cluster_id(source, signature),
+                    source=source,
+                    signature=signature,
+                    example_message=rows[0].message,
+                    events_count=len(rows),
+                    share=round(len(rows) / total, 3),
+                    severity_mix=severity_mix,
+                )
+            )
+
+        cluster_lookup = {(cluster.source, cluster.signature): cluster for cluster in clusters}
+        anomalies: list[LogAnomaly] = []
+        seen_anomaly_keys: set[tuple[str, str | None, str | None]] = set()
+        suspicious_words = ("error", "fail", "timeout", "panic", "denied", "refused", "critical")
+        rare_threshold_count = max(1, int(total * 0.05))
+
+        for (source, signature), rows in grouped.items():
+            cluster = cluster_lookup.get((source, signature))
+            if cluster is None:
+                continue
+            count = len(rows)
+            if count <= rare_threshold_count:
+                sample = rows[0].message.lower()
+                has_critical = any(e.severity == Severity.critical for e in rows)
+                has_suspicious_word = any(word in sample for word in suspicious_words)
+                if has_critical or has_suspicious_word:
+                    severity = Severity.warning if not has_critical else Severity.critical
+                    anomaly_key = ("rare_pattern", cluster.cluster_id, None)
+                    if anomaly_key in seen_anomaly_keys:
+                        continue
+                    seen_anomaly_keys.add(anomaly_key)
+                    anomalies.append(
+                        LogAnomaly(
+                            kind="rare_pattern",
+                            severity=severity,
+                            confidence=0.72 if not has_critical else 0.84,
+                            reason="Редкий паттерн логов с признаками ошибки.",
+                            evidence=[
+                                f"Правило: count <= {rare_threshold_count} (5% от окна).",
+                                f"Кластер {cluster.cluster_id}: {count} из {total} событий.",
+                                f"Пример: {rows[0].message[:180]}",
+                            ],
+                            related_cluster_id=cluster.cluster_id,
+                        )
+                    )
+
+        recent_window = min(max(10, total // 3), total)
+        if total > recent_window:
+            older = ordered_events[:-recent_window]
+            recent = ordered_events[-recent_window:]
+            older_counts: Counter[tuple[str, str]] = Counter((e.source, self._message_signature(e.message)) for e in older)
+            recent_counts: Counter[tuple[str, str]] = Counter((e.source, self._message_signature(e.message)) for e in recent)
+            for key, recent_count in recent_counts.items():
+                cluster = cluster_lookup.get(key)
+                if cluster is None:
+                    continue
+                older_count = older_counts.get(key, 0)
+                recent_rate = recent_count / len(recent)
+                older_rate = older_count / len(older) if older else 0.0
+                has_critical = cluster.severity_mix.get(Severity.critical.value, 0) > 0
+                if recent_count >= 3 and recent_rate >= 0.4 and older_rate <= 0.1:
+                    anomaly_key = ("burst_pattern", cluster.cluster_id, None)
+                    if anomaly_key in seen_anomaly_keys:
+                        continue
+                    seen_anomaly_keys.add(anomaly_key)
+                    anomalies.append(
+                        LogAnomaly(
+                            kind="burst_pattern",
+                            severity=Severity.critical if has_critical else Severity.warning,
+                            confidence=0.86 if has_critical else 0.8,
+                            reason="В последних событиях обнаружен всплеск повторяющегося паттерна.",
+                            evidence=[
+                                "Правило: recent_count>=3, recent_rate>=40%, historical_rate<=10%.",
+                                f"Кластер {cluster.cluster_id}: recent={recent_count}/{len(recent)} ({recent_rate:.0%}).",
+                                f"Историческая доля: {older_count}/{len(older)} ({older_rate:.0%}).",
+                            ],
+                            related_cluster_id=cluster.cluster_id,
+                        )
+                    )
+
+        metric_values: dict[str, list[float]] = defaultdict(list)
+        for event in ordered_events:
+            if event.metric and event.value is not None:
+                metric_values[event.metric].append(event.value)
+
+        for metric, values in metric_values.items():
+            if len(values) < 6:
+                continue
+            median = statistics.median(values)
+            deviations = [abs(v - median) for v in values]
+            mad = statistics.median(deviations)
+            if mad == 0:
+                continue
+            last = values[-1]
+            robust_z = abs(last - median) / (1.4826 * mad)
+            if robust_z >= 3:
+                anomaly_key = ("metric_outlier", None, metric)
+                if anomaly_key in seen_anomaly_keys:
+                    continue
+                seen_anomaly_keys.add(anomaly_key)
+                anomalies.append(
+                    LogAnomaly(
+                        kind="metric_outlier",
+                        severity=Severity.warning,
+                        confidence=min(0.95, round(0.65 + robust_z / 10, 2)),
+                        reason=f"Метрика {metric} имеет статистически значимое отклонение.",
+                        evidence=[
+                            "Правило: robust-z >= 3 на базе median/MAD.",
+                            f"Текущее значение: {last:.2f}",
+                            f"Медиана: {median:.2f}, MAD: {mad:.2f}, robust-z: {robust_z:.2f}",
+                        ],
+                        related_metric=metric,
+                    )
+                )
+
+        anomalies.sort(key=lambda item: item.confidence, reverse=True)
+        anomalies = anomalies[:max_anomalies]
+        summary = [
+            f"Проанализировано событий: {total} (окно limit={limit})",
+            f"Найдено кластеров: {len(clusters)} (показано top={max_clusters})",
+            f"Обнаружено аномалий: {len(anomalies)} (показано top={max_anomalies})",
+        ]
+        if anomalies:
+            summary.append(f"Топ-причина: {anomalies[0].reason}")
+
+        return LogAnalyticsInsight(
+            asset_id=asset_id,
+            analyzed_events=total,
+            clusters=clusters,
+            anomalies=anomalies,
+            summary=summary,
+        )
 
     def build_correlation_insights(self, asset_id: str) -> list[CorrelationInsight]:
         events = self.list_events(asset_id)
