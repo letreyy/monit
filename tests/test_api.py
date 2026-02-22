@@ -564,6 +564,7 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
             "audit_policy_id": "ui-pol-audit",
             "audit_sort": "asc",
             "audit_limit": 10,
+            "audit_page": 2,
         },
     )
     assert page.status_code == 200
@@ -573,6 +574,8 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     assert "Pages:" in page.text
     assert "audit_offset=0" in page.text
     assert "audit_offset=10" in page.text
+    assert "Jump +5 pages" in page.text
+    assert "Copy API URL" in page.text
     assert "API URL for current filters" in page.text
     assert "value='/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "policy_id=ui-pol-audit" in page.text

@@ -1053,6 +1053,7 @@ def ui_ai_policy_center(
     audit_sort: str = "desc",
     audit_offset: int = 0,
     audit_limit: int = 20,
+    audit_page: int = 1,
 ) -> str:
     tenant_scope = tenant_id.strip() or None
     selected_policy_id = policy_id.strip()
@@ -1072,15 +1073,21 @@ def ui_ai_policy_center(
     if audit_sort_norm not in {"asc", "desc"}:
         audit_sort_norm = "desc"
 
+    limit_norm = min(max(audit_limit, 1), 200)
+    page_norm = max(1, audit_page)
+    offset_norm = max(0, audit_offset)
+    if page_norm > 1:
+        offset_norm = (page_norm - 1) * limit_norm
+
     audit_rows = service.list_ai_log_policy_audit(
-        limit=min(max(audit_limit, 1), 200),
+        limit=limit_norm,
         tenant_id=tenant_scope,
         action=audit_action_norm,
         policy_id=audit_policy_id_norm,
         min_ts=audit_min_ts_norm,
         max_ts=audit_max_ts_norm,
         sort=audit_sort_norm,
-        offset=max(0, audit_offset),
+        offset=offset_norm,
     )
     audit_html = "".join(
         f"<tr><td>{row.ts}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&audit_policy_id={row.policy_id}'>{row.policy_id}</a></td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
@@ -1094,8 +1101,8 @@ def ui_ai_policy_center(
         f"min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
         f"max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
         f"sort={audit_sort_norm}",
-        f"offset={max(0, audit_offset)}",
-        f"limit={min(max(audit_limit, 1), 200)}",
+        f"offset={offset_norm}",
+        f"limit={limit_norm}",
     ]
     audit_csv_query = "&".join(item for item in audit_csv_params if item)
 
@@ -1109,17 +1116,17 @@ def ui_ai_policy_center(
         f"audit_min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
         f"audit_max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
         f"audit_sort={audit_sort_norm}",
-        f"audit_limit={min(max(audit_limit, 1), 200)}",
+        f"audit_limit={limit_norm}",
     ]
     ui_filter_query_base = "&".join(item for item in ui_filter_params if item)
-    prev_offset = max(0, max(0, audit_offset) - min(max(audit_limit, 1), 200))
-    next_offset = max(0, audit_offset) + min(max(audit_limit, 1), 200)
-    current_page = (max(0, audit_offset) // min(max(audit_limit, 1), 200)) + 1
+    prev_offset = max(0, offset_norm - limit_norm)
+    next_offset = offset_norm + limit_norm
+    current_page = (offset_norm // limit_norm) + 1
     page_start = max(1, current_page - 2)
     page_end = page_start + 4
     page_links = []
     for page in range(page_start, page_end + 1):
-        page_offset = (page - 1) * min(max(audit_limit, 1), 200)
+        page_offset = (page - 1) * limit_norm
         marker = "<b>" if page == current_page else ""
         marker_close = "</b>" if page == current_page else ""
         page_links.append(
@@ -1214,18 +1221,22 @@ def ui_ai_policy_center(
             <option value='asc' {'selected' if audit_sort_norm == 'asc' else ''}>asc</option>
           </select>
         </label>
-        <label style='margin-left:10px'>Offset <input name='audit_offset' type='number' min='0' value='{max(0, audit_offset)}'/></label>
-        <label style='margin-left:10px'>Limit <input name='audit_limit' type='number' min='1' max='200' value='{min(max(audit_limit, 1), 200)}'/></label>
+        <label style='margin-left:10px'>Offset <input name='audit_offset' type='number' min='0' value='{offset_norm}'/></label>
+        <label style='margin-left:10px'>Page <input name='audit_page' type='number' min='1' value='{current_page}'/></label>
+        <label style='margin-left:10px'>Limit <input name='audit_limit' type='number' min='1' max='200' value='{limit_norm}'/></label>
         <button type='submit'>Apply audit filters</button>
         <a href='/ai-log-analytics/policies/audit?{audit_csv_query}' style='margin-left:10px'>Open JSON</a>
         <a href='/ai-log-analytics/policies/audit.csv?{audit_csv_query}' style='margin-left:10px'>Export CSV</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset=0' style='margin-left:10px'>⏮ First</a>
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>
       </form>
       <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html}</div>
       <div style='margin:0 0 10px'>
         <label style='font-size:12px;color:#64748b'>API URL for current filters</label><br/>
-        <input readonly value='{api_url}' style='width:100%;max-width:980px'/>
+        <input id='api-url-current' readonly value='{api_url}' style='width:100%;max-width:980px'/>
+        <button type='button' style='margin-left:6px' onclick="navigator.clipboard.writeText(document.getElementById('api-url-current').value)">Copy API URL</button>
       </div>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
