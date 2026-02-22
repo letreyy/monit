@@ -1099,6 +1099,22 @@ def ui_ai_policy_center(
     ]
     audit_csv_query = "&".join(item for item in audit_csv_params if item)
 
+    ui_filter_params = [
+        f"tenant_id={tenant_scope}" if tenant_scope else "",
+        f"policy_id={selected_policy_id}" if selected_policy_id else "",
+        f"asset_id={selected_asset_id}" if selected_asset_id else "",
+        f"merge_strategy={merge_strategy.value if isinstance(merge_strategy, PolicyMergeStrategy) else str(merge_strategy)}",
+        f"audit_action={audit_action_norm}" if audit_action_norm else "",
+        f"audit_policy_id={audit_policy_id_norm}" if audit_policy_id_norm else "",
+        f"audit_min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
+        f"audit_max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
+        f"audit_sort={audit_sort_norm}",
+        f"audit_limit={min(max(audit_limit, 1), 200)}",
+    ]
+    ui_filter_query_base = "&".join(item for item in ui_filter_params if item)
+    prev_offset = max(0, max(0, audit_offset) - min(max(audit_limit, 1), 200))
+    next_offset = max(0, audit_offset) + min(max(audit_limit, 1), 200)
+
     dry_run_html = ""
     if selected_policy_id and selected_asset_id:
         try:
@@ -1180,7 +1196,10 @@ def ui_ai_policy_center(
         <label style='margin-left:10px'>Offset <input name='audit_offset' type='number' min='0' value='{max(0, audit_offset)}'/></label>
         <label style='margin-left:10px'>Limit <input name='audit_limit' type='number' min='1' max='200' value='{min(max(audit_limit, 1), 200)}'/></label>
         <button type='submit'>Apply audit filters</button>
+        <a href='/ai-log-analytics/policies/audit?{audit_csv_query}' style='margin-left:10px'>Open JSON</a>
         <a href='/ai-log-analytics/policies/audit.csv?{audit_csv_query}' style='margin-left:10px'>Export CSV</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>
       </form>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
