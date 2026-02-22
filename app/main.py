@@ -1089,6 +1089,13 @@ def ui_ai_policy_center(
         sort=audit_sort_norm,
         offset=offset_norm,
     )
+    total_audit_rows = service.count_ai_log_policy_audit(
+        tenant_id=tenant_scope,
+        action=audit_action_norm,
+        policy_id=audit_policy_id_norm,
+        min_ts=audit_min_ts_norm,
+        max_ts=audit_max_ts_norm,
+    )
     audit_html = "".join(
         f"<tr><td>{row.ts}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&audit_policy_id={row.policy_id}'>{row.policy_id}</a></td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
         for row in audit_rows
@@ -1133,6 +1140,8 @@ def ui_ai_policy_center(
             f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={page_offset}'>{marker}{page}{marker_close}</a>"
         )
     page_links_html = " | ".join(page_links)
+    last_page = max(1, (total_audit_rows + limit_norm - 1) // limit_norm)
+    last_offset = max(0, (last_page - 1) * limit_norm)
 
     api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"
 
@@ -1231,8 +1240,9 @@ def ui_ai_policy_center(
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}' style='margin-left:10px'>⏭ Last</a>
       </form>
-      <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html}</div>
+      <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html} &nbsp;|&nbsp; total rows: {total_audit_rows}</div>
       <div style='margin:0 0 10px'>
         <label style='font-size:12px;color:#64748b'>API URL for current filters</label><br/>
         <input id='api-url-current' readonly value='{api_url}' style='width:100%;max-width:980px'/>

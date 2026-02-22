@@ -579,6 +579,42 @@ class SQLiteStorage:
             )
         return entry
 
+
+    def count_ai_log_policy_audit(
+        self,
+        tenant_id: str | None = None,
+        action: str | None = None,
+        policy_id: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> int:
+        query = "SELECT COUNT(1) AS c FROM ai_log_policy_audit"
+        where_parts: list[str] = []
+        params: list[object] = []
+
+        if tenant_id is not None:
+            where_parts.append("tenant_id = ?")
+            params.append(tenant_id)
+        if action is not None:
+            where_parts.append("action = ?")
+            params.append(action)
+        if policy_id is not None:
+            where_parts.append("policy_id = ?")
+            params.append(policy_id)
+        if min_ts is not None:
+            where_parts.append("ts >= ?")
+            params.append(int(min_ts))
+        if max_ts is not None:
+            where_parts.append("ts <= ?")
+            params.append(int(max_ts))
+
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+
+        with self._connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
+        return int(row["c"] if row else 0)
+
     def list_ai_log_policy_audit(
         self,
         limit: int = 100,

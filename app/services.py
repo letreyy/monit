@@ -97,6 +97,22 @@ class MonitoringService:
     def add_ai_log_policy_audit(self, entry: LogAnalyticsPolicyAuditEntry) -> LogAnalyticsPolicyAuditEntry:
         return self.storage.insert_ai_log_policy_audit(entry)
 
+    def count_ai_log_policy_audit(
+        self,
+        tenant_id: str | None = None,
+        action: str | None = None,
+        policy_id: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> int:
+        return self.storage.count_ai_log_policy_audit(
+            tenant_id=tenant_id,
+            action=action,
+            policy_id=policy_id,
+            min_ts=min_ts,
+            max_ts=max_ts,
+        )
+
     def list_ai_log_policy_audit(
         self,
         limit: int = 100,
