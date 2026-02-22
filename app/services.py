@@ -277,8 +277,8 @@ class MonitoringService:
         )
 
         mode = str(impact_mode).strip().lower() or "weighted"
-        if mode not in {"weighted", "critical_only"}:
-            raise ValueError("Unknown impact_mode. Allowed values: weighted, critical_only")
+        if mode not in {"weighted", "critical_warning", "critical_only"}:
+            raise ValueError("Unknown impact_mode. Allowed values: weighted, critical_warning, critical_only")
 
         events = list(reversed(self.list_events(asset_id, limit=limit)))
         filtered = 0
@@ -296,6 +296,8 @@ class MonitoringService:
             mix = impacted_severity[key]
             if mode == "critical_only":
                 return float(mix.get("critical", 0))
+            if mode == "critical_warning":
+                return float((mix.get("critical", 0) * 3) + (mix.get("warning", 0) * 2))
             return float((mix.get("critical", 0) * 3) + (mix.get("warning", 0) * 2) + (mix.get("info", 0) * 1))
 
         top_impacted = sorted(

@@ -541,6 +541,7 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     assert "Top impacted clusters" in page.text
     assert "Severity mix" in page.text
     assert "Impact score" in page.text
+    assert "critical_warning" in page.text
 
     delete = client.post("/ui/ai/policies/ui-pol-1/delete", data={"tenant_id": ""}, follow_redirects=False)
     assert delete.status_code == 303
@@ -1849,6 +1850,15 @@ def test_ai_log_policy_dry_run_impact_mode_controls() -> None:
         },
     )
 
+    crit_warn = client.get(
+        "/assets/mode-asset/ai-log-analytics/policy-dry-run",
+        params={"policy_id": "pol-mode", "impact_mode": "critical_warning"},
+    )
+    assert crit_warn.status_code == 200
+    data = crit_warn.json()
+    assert data["impact_mode"] == "critical_warning"
+    assert data["top_impacted_clusters"][0]["impact_score"] >= 3.0
+
     crit = client.get(
         "/assets/mode-asset/ai-log-analytics/policy-dry-run",
         params={"policy_id": "pol-mode", "impact_mode": "critical_only"},
@@ -1863,6 +1873,7 @@ def test_ai_log_policy_dry_run_impact_mode_controls() -> None:
         params={"policy_id": "pol-mode", "impact_mode": "bad"},
     )
     assert bad.status_code == 422
+    assert "critical_warning" in bad.json()["detail"]
 
 def test_ai_log_policy_merge_strategy_validation() -> None:
     client.post("/assets", json={"id": "merge-val", "name": "merge-val", "asset_type": "server", "location": "R18"})

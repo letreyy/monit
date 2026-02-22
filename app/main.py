@@ -1177,7 +1177,7 @@ def ui_ai_policy_center(
     audit_csv_query = "&".join(item for item in audit_csv_params if item)
 
     impact_mode_norm = impact_mode.strip().lower() or "weighted"
-    if impact_mode_norm not in {"weighted", "critical_only"}:
+    if impact_mode_norm not in {"weighted", "critical_warning", "critical_only"}:
         impact_mode_norm = "weighted"
 
     ui_filter_params = [
@@ -1317,6 +1317,7 @@ def ui_ai_policy_center(
         <label style='margin-left:10px'>Impact mode
           <select name='impact_mode'>
             <option value='weighted' {'selected' if impact_mode_norm == 'weighted' else ''}>weighted</option>
+            <option value='critical_warning' {'selected' if impact_mode_norm == 'critical_warning' else ''}>critical_warning</option>
             <option value='critical_only' {'selected' if impact_mode_norm == 'critical_only' else ''}>critical_only</option>
           </select>
         </label>
