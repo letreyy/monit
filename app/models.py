@@ -194,6 +194,7 @@ class LogAnalyticsDryRunImpact(BaseModel):
     signature: str
     cluster_id: str
     events_filtered: int = Field(..., ge=1)
+    severity_mix: dict[str, int] = Field(default_factory=dict)
 
 class LogAnalyticsPolicyDryRun(BaseModel):
     asset_id: str

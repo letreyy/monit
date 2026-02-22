@@ -274,11 +274,14 @@ class MonitoringService:
         events = list(reversed(self.list_events(asset_id, limit=limit)))
         filtered = 0
         impacted_counter: Counter[tuple[str, str]] = Counter()
+        impacted_severity: defaultdict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         for event in events:
             signature = self._message_signature(event.message)
             if event.source.lower() in resolved_sources or signature in resolved_signatures:
                 filtered += 1
-                impacted_counter[(event.source, signature)] += 1
+                key = (event.source, signature)
+                impacted_counter[key] += 1
+                impacted_severity[key][event.severity.value] += 1
 
         top_impacted = sorted(
             impacted_counter.items(),
@@ -305,6 +308,7 @@ class MonitoringService:
                     signature=signature,
                     cluster_id=self._cluster_id(source, signature),
                     events_filtered=count,
+                    severity_mix=dict(impacted_severity[(source, signature)]),
                 )
                 for (source, signature), count in top_impacted
             ],
