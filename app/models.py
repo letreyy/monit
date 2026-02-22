@@ -136,6 +136,92 @@ class CorrelationInsight(BaseModel):
     recommendation: str
 
 
+class LogCluster(BaseModel):
+    cluster_id: str
+    source: str
+    signature: str
+    example_message: str
+    events_count: int = Field(..., ge=1)
+    share: float = Field(..., ge=0.0, le=1.0)
+    severity_mix: dict[str, int]
+
+
+class LogAnomaly(BaseModel):
+    kind: str
+    severity: Severity
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reason: str
+    evidence: list[str] = Field(default_factory=list)
+    related_cluster_id: str | None = None
+    related_metric: str | None = None
+
+
+class LogAnalyticsInsight(BaseModel):
+    asset_id: str
+    analyzed_events: int = Field(..., ge=0)
+    clusters: list[LogCluster]
+    anomalies: list[LogAnomaly]
+    summary: list[str]
+
+
+class PolicyMergeStrategy(str, Enum):
+    union = "union"
+    intersection = "intersection"
+
+
+class LogAnalyticsPolicy(BaseModel):
+    id: str
+    name: str
+    tenant_id: str | None = None
+    ignore_sources: list[str] = Field(default_factory=list)
+    ignore_signatures: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class LogAnalyticsPolicyAuditEntry(BaseModel):
+    ts: int
+    policy_id: str
+    tenant_id: str | None = None
+    action: str
+    actor_role: str
+    details: str = ""
+
+
+
+
+class LogAnalyticsDryRunImpact(BaseModel):
+    source: str
+    signature: str
+    cluster_id: str
+    events_filtered: int = Field(..., ge=1)
+
+class LogAnalyticsPolicyDryRun(BaseModel):
+    asset_id: str
+    total_events: int = Field(..., ge=0)
+    filtered_events: int = Field(..., ge=0)
+    remaining_events: int = Field(..., ge=0)
+    applied_sources: list[str] = Field(default_factory=list)
+    applied_signatures: list[str] = Field(default_factory=list)
+    top_impacted_clusters: list[LogAnalyticsDryRunImpact] = Field(default_factory=list)
+
+
+class LogAnalyticsAssetSummary(BaseModel):
+    asset_id: str
+    analyzed_events: int = Field(..., ge=0)
+    anomalies_total: int = Field(..., ge=0)
+    top_severity: Severity | None = None
+    top_reason: str | None = None
+
+
+class LogAnalyticsOverview(BaseModel):
+    assets_considered: int = Field(..., ge=0)
+    assets_with_anomalies: int = Field(..., ge=0)
+    total_anomalies: int = Field(..., ge=0)
+    by_kind: dict[str, int]
+    by_severity: dict[str, int]
+    assets: list[LogAnalyticsAssetSummary]
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str
