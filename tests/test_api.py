@@ -589,6 +589,7 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     )
     assert page.status_code == 200
     assert "Apply audit filters" in page.text
+    assert "audit_changed_field" in page.text
     assert "/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "/ai-log-analytics/policies/audit.csv?action=upsert" in page.text
     assert "Pages:" in page.text
@@ -1934,6 +1935,8 @@ def test_ai_log_policy_audit_entries() -> None:
     assert any(row["policy_id"] == "pol-audit" and row["action"] == "upsert" for row in rows)
     assert any(row["policy_id"] == "pol-audit" and row["action"] == "delete" for row in rows)
     assert any("\"before\"" in row["details"] and "\"after\"" in row["details"] for row in rows if row["action"] == "upsert")
+    assert any("\"schema_version\": 1" in row["details"] for row in rows)
+    assert any("\"changed_fields\"" in row["details"] for row in rows)
     assert any("\"action\": \"delete\"" in row["details"] and "\"before\"" in row["details"] for row in rows if row["action"] == "delete")
 
 
@@ -1952,7 +1955,7 @@ def test_ai_log_policy_audit_filters_and_csv() -> None:
 
     filtered = client.get(
         "/ai-log-analytics/policies/audit",
-        params={"tenant_id": "t4", "action": "delete", "policy_id": "pol-a1", "limit": 10},
+        params={"tenant_id": "t4", "action": "delete", "policy_id": "pol-a1", "changed_field": "deleted", "limit": 10},
         headers={"X-Role": "admin"},
     )
     assert filtered.status_code == 200

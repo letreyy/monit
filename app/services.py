@@ -104,6 +104,7 @@ class MonitoringService:
         policy_id: str | None = None,
         min_ts: int | None = None,
         max_ts: int | None = None,
+        changed_field: str | None = None,
     ) -> int:
         return self.storage.count_ai_log_policy_audit(
             tenant_id=tenant_id,
@@ -111,6 +112,7 @@ class MonitoringService:
             policy_id=policy_id,
             min_ts=min_ts,
             max_ts=max_ts,
+            changed_field=changed_field,
         )
 
     def list_ai_log_policy_audit(
@@ -123,6 +125,7 @@ class MonitoringService:
         max_ts: int | None = None,
         sort: str = "desc",
         offset: int = 0,
+        changed_field: str | None = None,
     ) -> list[LogAnalyticsPolicyAuditEntry]:
         return self.storage.list_ai_log_policy_audit(
             limit=limit,
@@ -133,6 +136,7 @@ class MonitoringService:
             max_ts=max_ts,
             sort=sort,
             offset=offset,
+            changed_field=changed_field,
         )
 
     def upsert_ai_log_policy(self, policy: LogAnalyticsPolicy) -> LogAnalyticsPolicy:

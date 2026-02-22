@@ -587,6 +587,7 @@ class SQLiteStorage:
         policy_id: str | None = None,
         min_ts: int | None = None,
         max_ts: int | None = None,
+        changed_field: str | None = None,
     ) -> int:
         query = "SELECT COUNT(1) AS c FROM ai_log_policy_audit"
         where_parts: list[str] = []
@@ -607,6 +608,9 @@ class SQLiteStorage:
         if max_ts is not None:
             where_parts.append("ts <= ?")
             params.append(int(max_ts))
+        if changed_field is not None:
+            where_parts.append("details LIKE ?")
+            params.append(f"%\"{changed_field}\"%")
 
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)
@@ -625,6 +629,7 @@ class SQLiteStorage:
         max_ts: int | None = None,
         sort: str = "desc",
         offset: int = 0,
+        changed_field: str | None = None,
     ) -> list[LogAnalyticsPolicyAuditEntry]:
         query = "SELECT ts, policy_id, tenant_id, action, actor_role, details FROM ai_log_policy_audit"
         where_parts: list[str] = []
@@ -645,6 +650,9 @@ class SQLiteStorage:
         if max_ts is not None:
             where_parts.append("ts <= ?")
             params.append(int(max_ts))
+        if changed_field is not None:
+            where_parts.append("details LIKE ?")
+            params.append(f"%\"{changed_field}\"%")
 
         if where_parts:
             query += " WHERE " + " AND ".join(where_parts)

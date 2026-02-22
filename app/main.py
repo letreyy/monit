@@ -1054,9 +1054,26 @@ def _policy_snapshot_dict(policy: LogAnalyticsPolicy | None) -> dict[str, object
 
 
 def _build_policy_audit_details(action: str, before: LogAnalyticsPolicy | None, after: LogAnalyticsPolicy | None = None) -> str:
-    payload: dict[str, object] = {"action": action, "before": _policy_snapshot_dict(before)}
-    if after is not None:
-        payload["after"] = _policy_snapshot_dict(after)
+    before_snapshot = _policy_snapshot_dict(before)
+    after_snapshot = _policy_snapshot_dict(after)
+    changed_fields: list[str] = []
+    if action == "delete":
+        changed_fields = ["deleted"]
+    elif before_snapshot is None and after_snapshot is not None:
+        changed_fields = ["created", "name", "tenant_id", "enabled", "ignore_sources", "ignore_signatures"]
+    elif before_snapshot is not None and after_snapshot is not None:
+        for key in ("name", "tenant_id", "enabled", "ignore_sources", "ignore_signatures"):
+            if before_snapshot.get(key) != after_snapshot.get(key):
+                changed_fields.append(key)
+
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "action": action,
+        "changed_fields": changed_fields,
+        "before": before_snapshot,
+    }
+    if after_snapshot is not None:
+        payload["after"] = after_snapshot
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -1080,6 +1097,7 @@ def ui_ai_policy_center(
     audit_offset: int = 0,
     audit_limit: int = 20,
     audit_page: int = 1,
+    audit_changed_field: str = "",
     impact_mode: str = "weighted",
 ) -> str:
     tenant_scope = tenant_id.strip() or None
@@ -1097,6 +1115,7 @@ def ui_ai_policy_center(
     audit_min_ts_norm = int(audit_min_ts.strip()) if audit_min_ts.strip().isdigit() else None
     audit_max_ts_norm = int(audit_max_ts.strip()) if audit_max_ts.strip().isdigit() else None
     audit_sort_norm = audit_sort.strip().lower()
+    audit_changed_field_norm = audit_changed_field.strip() or None
     if audit_sort_norm not in {"asc", "desc"}:
         audit_sort_norm = "desc"
 
@@ -1115,6 +1134,7 @@ def ui_ai_policy_center(
         max_ts=audit_max_ts_norm,
         sort=audit_sort_norm,
         offset=offset_norm,
+        changed_field=audit_changed_field_norm,
     )
     total_audit_rows = service.count_ai_log_policy_audit(
         tenant_id=tenant_scope,
@@ -1122,6 +1142,7 @@ def ui_ai_policy_center(
         policy_id=audit_policy_id_norm,
         min_ts=audit_min_ts_norm,
         max_ts=audit_max_ts_norm,
+        changed_field=audit_changed_field_norm,
     )
     audit_html = "".join(
         f"<tr><td>{row.ts}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&audit_policy_id={row.policy_id}'>{row.policy_id}</a></td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
@@ -1155,6 +1176,8 @@ def ui_ai_policy_center(
         f"audit_min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
         f"audit_max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
         f"audit_sort={audit_sort_norm}",
+        f"audit_changed_field={audit_changed_field_norm}" if audit_changed_field_norm else "",
+        f"changed_field={audit_changed_field_norm}" if audit_changed_field_norm else "",
         f"audit_limit={limit_norm}",
     ]
     ui_filter_query_base = "&".join(item for item in ui_filter_params if item)
@@ -1293,6 +1316,7 @@ def ui_ai_policy_center(
         <label style='margin-left:10px'>Policy <input name='audit_policy_id' value='{audit_policy_id_norm or ''}'/></label>
         <label style='margin-left:10px'>Min ts <input name='audit_min_ts' value='{audit_min_ts_norm or ''}'/></label>
         <label style='margin-left:10px'>Max ts <input name='audit_max_ts' value='{audit_max_ts_norm or ''}'/></label>
+        <label style='margin-left:10px'>Changed field <input name='audit_changed_field' value='{audit_changed_field_norm or ''}' placeholder='enabled|ignore_sources|deleted'/></label>
         <label style='margin-left:10px'>Sort
           <select name='audit_sort'>
             <option value='desc' {'selected' if audit_sort_norm == 'desc' else ''}>desc</option>
@@ -2645,6 +2669,7 @@ def list_ai_log_policy_audit(
     max_ts: int | None = None,
     sort: str = "desc",
     offset: int = 0,
+    changed_field: str | None = None,
     _role: str = Depends(_require_admin_dependency),
 ) -> list[LogAnalyticsPolicyAuditEntry]:
     tenant_scope = _resolve_tenant_scope(request, tenant_id)
@@ -2660,6 +2685,7 @@ def list_ai_log_policy_audit(
         max_ts=max_ts,
         sort=sort_norm,
         offset=max(0, offset),
+        changed_field=changed_field.strip() if changed_field else None,
     )
 
 
@@ -2674,6 +2700,7 @@ def ai_log_policy_audit_csv(
     max_ts: int | None = None,
     sort: str = "desc",
     offset: int = 0,
+    changed_field: str | None = None,
     _role: str = Depends(_require_admin_dependency),
 ) -> str:
     tenant_scope = _resolve_tenant_scope(request, tenant_id)
@@ -2689,6 +2716,7 @@ def ai_log_policy_audit_csv(
         max_ts=max_ts,
         sort=sort_norm,
         offset=max(0, offset),
+        changed_field=changed_field.strip() if changed_field else None,
     )
     header = 'ts,policy_id,tenant_id,action,actor_role,details\n'
     body = ''.join(
