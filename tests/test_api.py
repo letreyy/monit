@@ -595,6 +595,8 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     assert "Already at last page" in page.text
     assert "total rows:" in page.text
     assert "Copy API URL" in page.text
+    assert "Copy JSON URL" in page.text
+    assert "Copy CSV URL" in page.text
     assert "API URL for current filters" in page.text
     assert "value='/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "policy_id=ui-pol-audit" in page.text

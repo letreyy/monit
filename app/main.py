@@ -1271,8 +1271,21 @@ def ui_ai_policy_center(
       <div style='margin:0 0 10px'>
         <label style='font-size:12px;color:#64748b'>API URL for current filters</label><br/>
         <input id='api-url-current' readonly value='{api_url}' style='width:100%;max-width:980px'/>
-        <button type='button' style='margin-left:6px' onclick="navigator.clipboard.writeText(document.getElementById('api-url-current').value)">Copy API URL</button>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl(document.getElementById('api-url-current').value)">Copy API URL</button>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl('/ai-log-analytics/policies/audit?{audit_csv_query}')">Copy JSON URL</button>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl('/ai-log-analytics/policies/audit.csv?{audit_csv_query}')">Copy CSV URL</button>
+        <span id='copy-status' style='margin-left:8px;font-size:12px;color:#16a34a'></span>
       </div>
+      <script>
+        function copyPolicyAuditUrl(value) {{
+          navigator.clipboard.writeText(value);
+          const status = document.getElementById('copy-status');
+          if (status) {{
+            status.textContent = 'copied';
+            setTimeout(() => {{ status.textContent = ''; }}, 1200);
+          }}
+        }}
+      </script>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
         <tbody>{audit_html}</tbody>
