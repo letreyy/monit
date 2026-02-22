@@ -169,6 +169,15 @@ uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 - `POST /events`
 - `GET /assets/{asset_id}/events`
 - `GET /assets/{asset_id}/recommendation`
+- `GET /assets/{asset_id}/ai-log-analytics` (query: `limit`, `max_clusters`, `max_anomalies`, `ignore_sources`, `ignore_signatures`, `policy_id`, `policy_ids`, `policy_merge_strategy` where strategy is `union|intersection`)
+- `GET /ai-log-analytics/overview` (query: `limit_per_asset`, `max_assets`, `max_clusters`, `max_anomalies`, `ignore_sources`, `ignore_signatures`, `policy_id`, `policy_ids`, `policy_merge_strategy` where strategy is `union|intersection`)
+- `GET /ai-log-analytics/policies` (tenant-aware via query `tenant_id`)
+- `POST /ai-log-analytics/policies` (tenant-aware via query `tenant_id`)
+- `DELETE /ai-log-analytics/policies/{policy_id}` (tenant-aware via query `tenant_id`)
+- `GET /ai-log-analytics/policies/audit` (admin, filters: `tenant_id`, `action`, `policy_id`, `changed_field`, `min_ts`, `max_ts`, `sort`, `offset`)
+- `GET /ai-log-analytics/policies/audit.csv` (admin, same filters as JSON audit endpoint)
+- `GET /ai-log-analytics/policies/audit/parsed` (admin, same filters + parsed `details_json`)
+- `GET /assets/{asset_id}/ai-log-analytics/policy-dry-run` (counts + shares + top impacted clusters/signatures + severity mix + impact score, query `impact_mode=weighted|critical_only`)
 
 ## Интерфейс и автосбор данных
 
@@ -231,6 +240,8 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - REST API для ассетов, событий, batch-ingest и обзорной статистики.
 - UI-формы для управления ассетами/событиями/коллекторами.
 - UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
+- UI-страница AI analytics center (`/ui/ai`) с overview по ассетам и таблицей explainable аномалий по выбранному asset.
+- UI-страница AI policy center (`/ui/ai/policies`) с CRUD-потоком policy, dry-run предпросмотром (включая filtered/remaining shares, severity mix/impact score и top impacted clusters/signatures, плюс выбор `impact_mode` (weighted/critical_only)), фильтрами policy-audit (в т.ч. `changed_field` + preset quick-links), quick-links в JSON/CSV audit, numbered UI-пагинацией, jump-to-page, First/Last/Prev/Next (с disabled-state и tooltip-подсказками на границах) и кнопками copy API/JSON/CSV URL для текущего filter-state.
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
 ### 3) Agentless collectors
@@ -266,9 +277,9 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - Compliance automation:
   - запуски compliance-отчётов (`/auth/compliance/run`) и просмотр истории отчётов (`/auth/compliance/reports`);
   - статус/маршрутизация отчётов (`/auth/compliance/status`, `/auth/compliance/deliveries`) для webhook/email каналов;
-  - admin purge endpoint (`/auth/compliance/purge`) для retention-очистки access-audit/worker-history и telemetry reset.
+  - admin purge endpoint (`/auth/compliance/purge`) для retention-очистки access-audit/worker-history/ai-policy-audit и telemetry reset.
 
 ## Что дальше (укрупнённо)
 1. ✅ **OIDC enterprise hardening (базовый пакет)**: issuer-aware claim mapping (`role/scope/groups`) + richer JWT reject analytics (reason + issuer/client details).
 2. ✅ **Compliance automation (базовый пакет)**: scheduled compliance reports + routing stubs + retention/purge policies.
-3. **AI log analytics**: anomaly detection/clusterization + explainable insights поверх текущих rule/correlation механизмов.
+3. ✅ **AI log analytics (базовый пакет)**: anomaly detection/clusterization + explainable insights через API `/assets/{asset_id}/ai-log-analytics`.
