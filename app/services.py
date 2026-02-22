@@ -283,13 +283,9 @@ class MonitoringService:
                 impacted_counter[key] += 1
                 impacted_severity[key][event.severity.value] += 1
 
-        def _impact_score(key: tuple[str, str]) -> float:
-            mix = impacted_severity[key]
-            return float((mix.get("critical", 0) * 3) + (mix.get("warning", 0) * 2) + (mix.get("info", 0) * 1))
-
         top_impacted = sorted(
             impacted_counter.items(),
-            key=lambda item: (_impact_score(item[0]), item[1], item[0][0], item[0][1]),
+            key=lambda item: (item[1], item[0][0], item[0][1]),
             reverse=True,
         )[:10]
 
