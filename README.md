@@ -240,7 +240,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - UI-формы для управления ассетами/событиями/коллекторами.
 - UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
 - UI-страница AI analytics center (`/ui/ai`) с overview по ассетам и таблицей explainable аномалий по выбранному asset.
-- UI-страница AI policy center (`/ui/ai/policies`) с CRUD-потоком policy, dry-run предпросмотром (включая top impacted clusters/signatures), фильтрами policy-audit, quick-links в JSON/CSV audit, numbered UI-пагинацией, jump-to-page, First/Last переходами и кнопкой copy API URL для текущего filter-state.
+- UI-страница AI policy center (`/ui/ai/policies`) с CRUD-потоком policy, dry-run предпросмотром (включая top impacted clusters/signatures), фильтрами policy-audit, quick-links в JSON/CSV audit, numbered UI-пагинацией, jump-to-page, First/Last/Prev/Next (с disabled-state на границах) и кнопкой copy API URL для текущего filter-state.
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
 ### 3) Agentless collectors

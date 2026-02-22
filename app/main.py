@@ -1143,6 +1143,32 @@ def ui_ai_policy_center(
     last_page = max(1, (total_audit_rows + limit_norm - 1) // limit_norm)
     last_offset = max(0, (last_page - 1) * limit_norm)
 
+    first_link = (
+        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset=0' style='margin-left:10px'>⏮ First</a>"
+        if current_page > 1
+        else "<span style='margin-left:10px;color:#94a3b8'>⏮ First</span>"
+    )
+    prev_link = (
+        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>"
+        if current_page > 1
+        else "<span style='margin-left:10px;color:#94a3b8'>◀ Prev</span>"
+    )
+    next_link = (
+        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>"
+        if current_page < last_page
+        else "<span style='margin-left:10px;color:#94a3b8'>Next ▶</span>"
+    )
+    jump_link = (
+        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>"
+        if current_page < last_page
+        else "<span style='margin-left:10px;color:#94a3b8'>Jump +5 pages</span>"
+    )
+    last_link = (
+        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}' style='margin-left:10px'>⏭ Last</a>"
+        if current_page < last_page
+        else "<span style='margin-left:10px;color:#94a3b8'>⏭ Last</span>"
+    )
+
     api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"
 
     dry_run_html = ""
@@ -1236,11 +1262,11 @@ def ui_ai_policy_center(
         <button type='submit'>Apply audit filters</button>
         <a href='/ai-log-analytics/policies/audit?{audit_csv_query}' style='margin-left:10px'>Open JSON</a>
         <a href='/ai-log-analytics/policies/audit.csv?{audit_csv_query}' style='margin-left:10px'>Export CSV</a>
-        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset=0' style='margin-left:10px'>⏮ First</a>
-        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>
-        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>
-        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>
-        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}' style='margin-left:10px'>⏭ Last</a>
+        {first_link}
+        {prev_link}
+        {next_link}
+        {jump_link}
+        {last_link}
       </form>
       <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html} &nbsp;|&nbsp; total rows: {total_audit_rows}</div>
       <div style='margin:0 0 10px'>

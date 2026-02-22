@@ -542,6 +542,21 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     assert delete.status_code == 303
 
 
+
+
+def test_ui_ai_policy_center_audit_nav_disabled_on_first_page() -> None:
+    page = client.get(
+        "/ui/ai/policies",
+        params={
+            "audit_action": "upsert",
+            "audit_limit": 10,
+            "audit_page": 1,
+        },
+    )
+    assert page.status_code == 200
+    assert "⏮ First</span>" in page.text
+    assert "◀ Prev</span>" in page.text
+
 def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     save = client.post(
         "/ui/ai/policies",
