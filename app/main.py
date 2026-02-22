@@ -1040,6 +1040,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
 
 
 
+def _render_audit_nav_link(label: str, href: str, enabled: bool, disabled_hint: str, margin_left: str = "10px") -> str:
+    if enabled:
+        return f"<a href='{href}' style='margin-left:{margin_left}'>{label}</a>"
+    return f"<span style='margin-left:{margin_left};color:#94a3b8' title='{disabled_hint}'>{label}</span>"
+
+
 @app.get("/ui/ai/policies", response_class=HTMLResponse)
 def ui_ai_policy_center(
     tenant_id: str = "",
@@ -1142,30 +1148,35 @@ def ui_ai_policy_center(
     last_page = max(1, (total_audit_rows + limit_norm - 1) // limit_norm)
     last_offset = max(0, (last_page - 1) * limit_norm)
 
-    first_link = (
-        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset=0' style='margin-left:10px'>⏮ First</a>"
-        if current_page > 1
-        else "<span style='margin-left:10px;color:#94a3b8' title='Already at first page'>⏮ First</span>"
+    first_link = _render_audit_nav_link(
+        label='⏮ First',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset=0',
+        enabled=current_page > 1,
+        disabled_hint='Already at first page',
     )
-    prev_link = (
-        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>"
-        if current_page > 1
-        else "<span style='margin-left:10px;color:#94a3b8' title='Already at first page'>◀ Prev</span>"
+    prev_link = _render_audit_nav_link(
+        label='◀ Prev',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}',
+        enabled=current_page > 1,
+        disabled_hint='Already at first page',
     )
-    next_link = (
-        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>"
-        if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>Next ▶</span>"
+    next_link = _render_audit_nav_link(
+        label='Next ▶',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
     )
-    jump_link = (
-        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>"
-        if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>Jump +5 pages</span>"
+    jump_link = _render_audit_nav_link(
+        label='Jump +5 pages',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
     )
-    last_link = (
-        f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}' style='margin-left:10px'>⏭ Last</a>"
-        if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>⏭ Last</span>"
+    last_link = _render_audit_nav_link(
+        label='⏭ Last',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
     )
 
     api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"
@@ -1185,7 +1196,7 @@ def ui_ai_policy_center(
             ) or "<tr><td colspan='4'>No impacted clusters.</td></tr>"
             dry_run_html = (
                 f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
-                f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events}, remaining={dry_run.remaining_events}"
+                f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events} ({int(dry_run.filtered_share*100)}%), remaining={dry_run.remaining_events} ({int(dry_run.remaining_share*100)}%)"
                 f"<br/><span style='font-size:12px;color:#64748b'>sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
                 f"<div style='margin-top:10px'><b>Top impacted clusters</b></div>"
                 f"<table border='0' cellpadding='6' cellspacing='0' style='width:100%;margin-top:6px;background:#fff;border:1px solid #e2e8f0'>"

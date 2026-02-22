@@ -287,11 +287,16 @@ class MonitoringService:
         )[:10]
 
         total = len(events)
+        remaining = max(0, total - filtered)
+        filtered_share = round((filtered / total), 3) if total else 0.0
+        remaining_share = round((remaining / total), 3) if total else 0.0
         return LogAnalyticsPolicyDryRun(
             asset_id=asset_id,
             total_events=total,
             filtered_events=filtered,
-            remaining_events=max(0, total - filtered),
+            remaining_events=remaining,
+            filtered_share=filtered_share,
+            remaining_share=remaining_share,
             applied_sources=sorted(resolved_sources),
             applied_signatures=sorted(resolved_signatures),
             top_impacted_clusters=[

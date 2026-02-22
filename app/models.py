@@ -200,6 +200,8 @@ class LogAnalyticsPolicyDryRun(BaseModel):
     total_events: int = Field(..., ge=0)
     filtered_events: int = Field(..., ge=0)
     remaining_events: int = Field(..., ge=0)
+    filtered_share: float = Field(0.0, ge=0.0, le=1.0)
+    remaining_share: float = Field(0.0, ge=0.0, le=1.0)
     applied_sources: list[str] = Field(default_factory=list)
     applied_signatures: list[str] = Field(default_factory=list)
     top_impacted_clusters: list[LogAnalyticsDryRunImpact] = Field(default_factory=list)
