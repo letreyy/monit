@@ -880,7 +880,7 @@ def ui_assets() -> str:
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Assets</h1>
-      <p><a href='/dashboard'>← Dashboard</a></p>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/ai'>AI analytics</a></p>
       <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
         <label>ID <input name='asset_id' required /></label><br/><br/>
         <label>Name <input name='name' required /></label><br/><br/>
@@ -950,7 +950,7 @@ def ui_asset_detail(asset_id: str) -> str:
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Asset detail: {asset.id}</h1>
-      <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a></p>
+      <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ui/ai?asset_id={asset.id}'>AI analytics</a></p>
       <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
       <h2>Recommendation</h2>
       <p><b>Risk score:</b> {rec.risk_score} — {rec.summary}</p>
@@ -965,6 +965,78 @@ def ui_asset_detail(asset_id: str) -> str:
     </body></html>
     """
 
+
+
+
+@app.get("/ui/ai", response_class=HTMLResponse)
+def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: int = 200, max_assets: int = 25) -> str:
+    tenant_scope = tenant_id.strip() or None
+    requested_asset_id = asset_id.strip()
+    tenant_assets = [asset for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)]
+    selected_asset = requested_asset_id or (tenant_assets[0].id if tenant_assets else "")
+
+    rows: list[str] = []
+    if selected_asset and any(asset.id == selected_asset for asset in tenant_assets):
+        insight = service.build_log_analytics(
+            selected_asset,
+            limit=min(max(limit_per_asset, 20), 2000),
+            max_clusters=10,
+            max_anomalies=10,
+        )
+        for anomaly in insight.anomalies:
+            evidence = anomaly.evidence[0] if anomaly.evidence else "-"
+            rows.append(
+                f"<tr><td>{anomaly.kind}</td><td>{anomaly.severity.value}</td><td>{anomaly.confidence}</td><td>{anomaly.reason}</td><td>{evidence}</td></tr>"
+            )
+
+    anomaly_rows = "".join(rows) if rows else "<tr><td colspan='5'>No anomalies for selected asset.</td></tr>"
+    options = "".join(
+        f"<option value='{asset.id}' {'selected' if asset.id == selected_asset else ''}>{asset.id} ({asset.name})</option>"
+        for asset in tenant_assets
+    ) or "<option value=''>No assets in scope</option>"
+
+    overview = service.build_log_analytics_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        asset_ids={asset.id for asset in tenant_assets},
+    )
+
+    top_assets_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.anomalies_total}</td><td>{item.top_severity.value if item.top_severity else '-'}</td><td>{item.top_reason or '-'}</td></tr>"
+        for item in overview.assets[:10]
+    ) or "<tr><td colspan='4'>No analyzed assets.</td></tr>"
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>AI analytics center</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Assets</a> | <a href='/ai-log-analytics/overview'>JSON API overview</a></p>
+      <form method='get' action='/ui/ai' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:14px'>
+        <label>Asset
+          <select name='asset_id'>{options}</select>
+        </label>
+        <label style='margin-left:10px'>Tenant id <input name='tenant_id' value='{tenant_scope or ''}' placeholder='optional'/></label>
+        <button type='submit'>Load analytics</button>
+      </form>
+
+      <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Assets considered</b><div style='font-size:30px'>{overview.assets_considered}</div></div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Assets with anomalies</b><div style='font-size:30px'>{overview.assets_with_anomalies}</div></div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Total anomalies</b><div style='font-size:30px'>{overview.total_anomalies}</div></div>
+      </div>
+
+      <h2>Top assets by anomalies</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Anomalies</th><th>Top severity</th><th>Top reason</th></tr></thead>
+        <tbody>{top_assets_rows}</tbody>
+      </table>
+
+      <h2>Selected asset anomalies</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Kind</th><th>Severity</th><th>Confidence</th><th>Reason</th><th>Evidence</th></tr></thead>
+        <tbody>{anomaly_rows}</tbody>
+      </table>
+    </body></html>
+    """
 
 @app.get("/ui/events", response_class=HTMLResponse)
 def ui_events() -> str:
@@ -1979,7 +2051,7 @@ def dashboard(
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/ai'>AI Analytics</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
         </div>
       </div>
       <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>

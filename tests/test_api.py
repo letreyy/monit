@@ -490,11 +490,35 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert "/static/dashboard.js" in resp.text
     assert "worker-health" in resp.text
     assert "flt-role" in resp.text
+    assert "AI Analytics" in resp.text
     assert "nav-collectors" in resp.text
     assert "/worker/health" in resp.text
 
 
 
+
+
+
+def test_ui_ai_analytics_center_page() -> None:
+    client.post(
+        "/assets",
+        json={"id": "ui-ai-1", "name": "ui-ai-1", "asset_type": "server", "location": "R1"},
+    )
+    client.post(
+        "/events",
+        json={
+            "asset_id": "ui-ai-1",
+            "source": "syslog",
+            "message": "CRITICAL timeout from backend",
+            "severity": "critical",
+        },
+    )
+
+    resp = client.get("/ui/ai?asset_id=ui-ai-1")
+    assert resp.status_code == 200
+    assert "AI analytics center" in resp.text
+    assert "Selected asset anomalies" in resp.text
+    assert "ui-ai-1" in resp.text
 
 def test_dashboard_data_endpoint_shape() -> None:
     resp = client.get("/dashboard/data")
