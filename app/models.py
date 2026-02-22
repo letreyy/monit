@@ -197,6 +197,25 @@ class LogAnalyticsDryRunImpact(BaseModel):
     severity_mix: dict[str, int] = Field(default_factory=dict)
     impact_score: float = Field(0.0, ge=0.0)
 
+
+
+class LogAnalyticsPolicyAuditDetails(BaseModel):
+    schema_version: int = 1
+    action: str
+    changed_fields: list[str] = Field(default_factory=list)
+    before: dict[str, object] | None = None
+    after: dict[str, object] | None = None
+
+
+class LogAnalyticsPolicyAuditEntryParsed(BaseModel):
+    ts: int
+    policy_id: str
+    tenant_id: str | None = None
+    action: str
+    actor_role: str
+    details: str = ""
+    details_json: LogAnalyticsPolicyAuditDetails | None = None
+
 class LogAnalyticsPolicyDryRun(BaseModel):
     asset_id: str
     total_events: int = Field(..., ge=0)

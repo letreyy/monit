@@ -590,6 +590,9 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     assert page.status_code == 200
     assert "Apply audit filters" in page.text
     assert "audit_changed_field" in page.text
+    assert "preset: enabled" in page.text
+    assert "preset: ignore_sources" in page.text
+    assert "preset: deleted" in page.text
     assert "/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "/ai-log-analytics/policies/audit.csv?action=upsert" in page.text
     assert "Pages:" in page.text

@@ -35,7 +35,9 @@ from app.models import (
     LogAnalyticsInsight,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
+    LogAnalyticsPolicyAuditDetails,
     LogAnalyticsPolicyAuditEntry,
+    LogAnalyticsPolicyAuditEntryParsed,
     LogAnalyticsPolicyDryRun,
     PolicyMergeStrategy,
     Overview,
@@ -1077,6 +1079,19 @@ def _build_policy_audit_details(action: str, before: LogAnalyticsPolicy | None, 
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
+def _parse_policy_audit_details(details: str) -> LogAnalyticsPolicyAuditDetails | None:
+    try:
+        payload = json.loads(details)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return LogAnalyticsPolicyAuditDetails(**payload)
+    except Exception:
+        return None
+
+
 def _render_audit_nav_link(label: str, href: str, enabled: bool, disabled_hint: str, margin_left: str = "10px") -> str:
     if enabled:
         return f"<a href='{href}' style='margin-left:{margin_left}'>{label}</a>"
@@ -1317,6 +1332,9 @@ def ui_ai_policy_center(
         <label style='margin-left:10px'>Min ts <input name='audit_min_ts' value='{audit_min_ts_norm or ''}'/></label>
         <label style='margin-left:10px'>Max ts <input name='audit_max_ts' value='{audit_max_ts_norm or ''}'/></label>
         <label style='margin-left:10px'>Changed field <input name='audit_changed_field' value='{audit_changed_field_norm or ''}' placeholder='enabled|ignore_sources|deleted'/></label>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=enabled' style='margin-left:8px;font-size:12px'>preset: enabled</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=ignore_sources' style='margin-left:6px;font-size:12px'>preset: ignore_sources</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=deleted' style='margin-left:6px;font-size:12px'>preset: deleted</a>
         <label style='margin-left:10px'>Sort
           <select name='audit_sort'>
             <option value='desc' {'selected' if audit_sort_norm == 'desc' else ''}>desc</option>
@@ -2687,6 +2705,42 @@ def list_ai_log_policy_audit(
         offset=max(0, offset),
         changed_field=changed_field.strip() if changed_field else None,
     )
+
+
+@app.get("/ai-log-analytics/policies/audit/parsed", response_model=list[LogAnalyticsPolicyAuditEntryParsed])
+def list_ai_log_policy_audit_parsed(
+    request: Request,
+    limit: int = 100,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    changed_field: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    _role: str = Depends(_require_admin_dependency),
+) -> list[LogAnalyticsPolicyAuditEntryParsed]:
+    rows = list_ai_log_policy_audit(
+        request=request,
+        limit=limit,
+        tenant_id=tenant_id,
+        action=action,
+        policy_id=policy_id,
+        changed_field=changed_field,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort,
+        offset=offset,
+        _role=_role,
+    )
+    return [
+        LogAnalyticsPolicyAuditEntryParsed(
+            **row.model_dump(),
+            details_json=_parse_policy_audit_details(row.details),
+        )
+        for row in rows
+    ]
 
 
 @app.get("/ai-log-analytics/policies/audit.csv", response_class=PlainTextResponse)
