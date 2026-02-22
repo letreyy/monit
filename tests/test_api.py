@@ -569,8 +569,11 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     assert "Apply audit filters" in page.text
     assert "/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "/ai-log-analytics/policies/audit.csv?action=upsert" in page.text
+    assert "Pages:" in page.text
     assert "audit_offset=0" in page.text
     assert "audit_offset=10" in page.text
+    assert "API URL for current filters" in page.text
+    assert "value='/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "policy_id=ui-pol-audit" in page.text
 
 def test_ui_ai_analytics_center_page() -> None:

@@ -1114,6 +1114,20 @@ def ui_ai_policy_center(
     ui_filter_query_base = "&".join(item for item in ui_filter_params if item)
     prev_offset = max(0, max(0, audit_offset) - min(max(audit_limit, 1), 200))
     next_offset = max(0, audit_offset) + min(max(audit_limit, 1), 200)
+    current_page = (max(0, audit_offset) // min(max(audit_limit, 1), 200)) + 1
+    page_start = max(1, current_page - 2)
+    page_end = page_start + 4
+    page_links = []
+    for page in range(page_start, page_end + 1):
+        page_offset = (page - 1) * min(max(audit_limit, 1), 200)
+        marker = "<b>" if page == current_page else ""
+        marker_close = "</b>" if page == current_page else ""
+        page_links.append(
+            f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={page_offset}'>{marker}{page}{marker_close}</a>"
+        )
+    page_links_html = " | ".join(page_links)
+
+    api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"
 
     dry_run_html = ""
     if selected_policy_id and selected_asset_id:
@@ -1201,6 +1215,11 @@ def ui_ai_policy_center(
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>
         <a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>
       </form>
+      <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html}</div>
+      <div style='margin:0 0 10px'>
+        <label style='font-size:12px;color:#64748b'>API URL for current filters</label><br/>
+        <input readonly value='{api_url}' style='width:100%;max-width:980px'/>
+      </div>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
         <tbody>{audit_html}</tbody>
