@@ -1138,10 +1138,17 @@ def ui_ai_policy_center(
                 merge_strategy=merge_strategy,
                 tenant_id=tenant_scope,
             )
+            impact_rows = "".join(
+                f"<tr><td>{item.cluster_id}</td><td>{item.source}</td><td>{item.events_filtered}</td><td>{item.signature}</td></tr>"
+                for item in dry_run.top_impacted_clusters
+            ) or "<tr><td colspan='4'>No impacted clusters.</td></tr>"
             dry_run_html = (
                 f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
                 f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events}, remaining={dry_run.remaining_events}"
                 f"<br/><span style='font-size:12px;color:#64748b'>sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
+                f"<div style='margin-top:10px'><b>Top impacted clusters</b></div>"
+                f"<table border='0' cellpadding='6' cellspacing='0' style='width:100%;margin-top:6px;background:#fff;border:1px solid #e2e8f0'>"
+                f"<thead><tr><th>Cluster</th><th>Source</th><th>Filtered events</th><th>Signature</th></tr></thead><tbody>{impact_rows}</tbody></table>"
                 f"</div>"
             )
         except KeyError as exc:

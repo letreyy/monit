@@ -536,6 +536,7 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     assert "AI policy center" in page.text
     assert "ui-pol-1" in page.text
     assert "Dry-run result" in page.text
+    assert "Top impacted clusters" in page.text
 
     delete = client.post("/ui/ai/policies/ui-pol-1/delete", data={"tenant_id": ""}, follow_redirects=False)
     assert delete.status_code == 303
@@ -1788,6 +1789,9 @@ def test_ai_log_policy_dry_run_endpoint() -> None:
     assert data["filtered_events"] >= 2
     assert data["remaining_events"] == 0
     assert "linux" in data["applied_sources"]
+    assert len(data["top_impacted_clusters"]) >= 1
+    assert data["top_impacted_clusters"][0]["events_filtered"] >= 1
+    assert data["top_impacted_clusters"][0]["cluster_id"].startswith("cl-")
 
 
 def test_ai_log_policy_merge_strategy_validation() -> None:

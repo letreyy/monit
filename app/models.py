@@ -187,6 +187,14 @@ class LogAnalyticsPolicyAuditEntry(BaseModel):
     details: str = ""
 
 
+
+
+class LogAnalyticsDryRunImpact(BaseModel):
+    source: str
+    signature: str
+    cluster_id: str
+    events_filtered: int = Field(..., ge=1)
+
 class LogAnalyticsPolicyDryRun(BaseModel):
     asset_id: str
     total_events: int = Field(..., ge=0)
@@ -194,6 +202,7 @@ class LogAnalyticsPolicyDryRun(BaseModel):
     remaining_events: int = Field(..., ge=0)
     applied_sources: list[str] = Field(default_factory=list)
     applied_signatures: list[str] = Field(default_factory=list)
+    top_impacted_clusters: list[LogAnalyticsDryRunImpact] = Field(default_factory=list)
 
 
 class LogAnalyticsAssetSummary(BaseModel):

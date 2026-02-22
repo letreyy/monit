@@ -17,6 +17,7 @@ from app.models import (
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditEntry,
     LogAnalyticsPolicyDryRun,
+    LogAnalyticsDryRunImpact,
     PolicyMergeStrategy,
     LogAnomaly,
     LogCluster,
@@ -256,10 +257,18 @@ class MonitoringService:
 
         events = list(reversed(self.list_events(asset_id, limit=limit)))
         filtered = 0
+        impacted_counter: Counter[tuple[str, str]] = Counter()
         for event in events:
             signature = self._message_signature(event.message)
             if event.source.lower() in resolved_sources or signature in resolved_signatures:
                 filtered += 1
+                impacted_counter[(event.source, signature)] += 1
+
+        top_impacted = sorted(
+            impacted_counter.items(),
+            key=lambda item: (item[1], item[0][0], item[0][1]),
+            reverse=True,
+        )[:10]
 
         total = len(events)
         return LogAnalyticsPolicyDryRun(
@@ -269,6 +278,15 @@ class MonitoringService:
             remaining_events=max(0, total - filtered),
             applied_sources=sorted(resolved_sources),
             applied_signatures=sorted(resolved_signatures),
+            top_impacted_clusters=[
+                LogAnalyticsDryRunImpact(
+                    source=source,
+                    signature=signature,
+                    cluster_id=self._cluster_id(source, signature),
+                    events_filtered=count,
+                )
+                for (source, signature), count in top_impacted
+            ],
         )
 
     def build_log_analytics(
