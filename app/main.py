@@ -1009,7 +1009,7 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>AI analytics center</h1>
-      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Assets</a> | <a href='/ai-log-analytics/overview'>JSON API overview</a></p>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Assets</a> | <a href='/ui/ai/policies'>AI Policy Center</a> | <a href='/ai-log-analytics/overview'>JSON API overview</a></p>
       <form method='get' action='/ui/ai' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:14px'>
         <label>Asset
           <select name='asset_id'>{options}</select>
@@ -1037,6 +1037,159 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
       </table>
     </body></html>
     """
+
+
+
+@app.get("/ui/ai/policies", response_class=HTMLResponse)
+def ui_ai_policy_center(
+    tenant_id: str = "",
+    policy_id: str = "",
+    asset_id: str = "",
+    merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+) -> str:
+    tenant_scope = tenant_id.strip() or None
+    selected_policy_id = policy_id.strip()
+    selected_asset_id = asset_id.strip()
+
+    policies = service.list_ai_log_policies(tenant_id=tenant_scope)
+    policy_rows = "".join(
+        f"<tr><td>{item.id}</td><td>{item.name}</td><td>{item.tenant_id or '-'}</td><td>{'on' if item.enabled else 'off'}</td><td>{len(item.ignore_sources)}</td><td>{len(item.ignore_signatures)}</td><td><form method='post' action='/ui/ai/policies/{item.id}/delete' style='margin:0'><input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/><button type='submit'>Delete</button></form></td></tr>"
+        for item in policies
+    ) or "<tr><td colspan='7'>No policies yet.</td></tr>"
+
+    audit_rows = service.list_ai_log_policy_audit(limit=20, tenant_id=tenant_scope)
+    audit_html = "".join(
+        f"<tr><td>{row.ts}</td><td>{row.policy_id}</td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
+        for row in audit_rows
+    ) or "<tr><td colspan='5'>No audit rows.</td></tr>"
+
+    dry_run_html = ""
+    if selected_policy_id and selected_asset_id:
+        try:
+            dry_run = service.preview_ai_log_policy_effect(
+                asset_id=selected_asset_id,
+                policy_id=selected_policy_id,
+                merge_strategy=merge_strategy,
+                tenant_id=tenant_scope,
+            )
+            dry_run_html = (
+                f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
+                f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events}, remaining={dry_run.remaining_events}"
+                f"<br/><span style='font-size:12px;color:#64748b'>sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
+                f"</div>"
+            )
+        except KeyError as exc:
+            dry_run_html = f"<div style='color:#b91c1c;margin:10px 0'>Dry-run failed: {exc}</div>"
+
+    asset_options = "".join(
+        f"<option value='{asset.id}' {'selected' if asset.id == selected_asset_id else ''}>{asset.id}</option>"
+        for asset in service.list_assets()
+        if _asset_in_tenant(asset.id, tenant_scope)
+    ) or "<option value=''>No assets in scope</option>"
+    policy_options = "".join(
+        f"<option value='{item.id}' {'selected' if item.id == selected_policy_id else ''}>{item.id} ({item.name})</option>"
+        for item in policies
+    ) or "<option value=''>No policies</option>"
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>AI policy center</h1>
+      <p><a href='/ui/ai'>← AI analytics</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ai-log-analytics/policies'>JSON policies API</a></p>
+
+      <form method='post' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+        <h3>Create/update policy</h3>
+        <label>ID <input name='policy_id' required/></label>
+        <label style='margin-left:10px'>Name <input name='name' required/></label>
+        <label style='margin-left:10px'>Tenant <input name='tenant_id' value='{tenant_scope or ''}' placeholder='optional'/></label><br/><br/>
+        <label>Ignore sources (csv) <input name='ignore_sources' style='min-width:420px'/></label><br/><br/>
+        <label>Ignore signatures (csv) <input name='ignore_signatures' style='min-width:420px'/></label><br/><br/>
+        <label><input type='checkbox' name='enabled' checked/> enabled</label><br/><br/>
+        <button type='submit'>Save policy</button>
+      </form>
+
+      <h3 style='margin-top:16px'>Policies</h3>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>ID</th><th>Name</th><th>Tenant</th><th>Enabled</th><th>Ignore sources</th><th>Ignore signatures</th><th>Actions</th></tr></thead>
+        <tbody>{policy_rows}</tbody>
+      </table>
+
+      <h3 style='margin-top:16px'>Policy dry-run</h3>
+      <form method='get' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+        <input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/>
+        <label>Policy <select name='policy_id'>{policy_options}</select></label>
+        <label style='margin-left:10px'>Asset <select name='asset_id'>{asset_options}</select></label>
+        <label style='margin-left:10px'>Merge
+          <select name='merge_strategy'>
+            <option value='union' {'selected' if merge_strategy == PolicyMergeStrategy.union else ''}>union</option>
+            <option value='intersection' {'selected' if merge_strategy == PolicyMergeStrategy.intersection else ''}>intersection</option>
+          </select>
+        </label>
+        <button type='submit'>Run dry-run</button>
+      </form>
+      {dry_run_html}
+
+      <h3>Recent policy audit</h3>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
+        <tbody>{audit_html}</tbody>
+      </table>
+    </body></html>
+    """
+
+
+@app.post("/ui/ai/policies")
+def ui_ai_policy_center_upsert(
+    policy_id: str = Form(...),
+    name: str = Form(...),
+    tenant_id: str = Form(""),
+    ignore_sources: str = Form(""),
+    ignore_signatures: str = Form(""),
+    enabled: str | None = Form(None),
+) -> RedirectResponse:
+    tenant_scope = tenant_id.strip() or None
+    policy = LogAnalyticsPolicy(
+        id=policy_id.strip(),
+        name=name.strip(),
+        tenant_id=tenant_scope,
+        ignore_sources=[item.strip().lower() for item in ignore_sources.split(",") if item.strip()],
+        ignore_signatures=[item.strip().lower() for item in ignore_signatures.split(",") if item.strip()],
+        enabled=enabled is not None,
+    )
+    stored = service.upsert_ai_log_policy(policy)
+    service.add_ai_log_policy_audit(
+        LogAnalyticsPolicyAuditEntry(
+            ts=int(time.time()),
+            policy_id=stored.id,
+            tenant_id=stored.tenant_id,
+            action="upsert",
+            actor_role="ui",
+            details=f"enabled={stored.enabled};sources={len(stored.ignore_sources)};signatures={len(stored.ignore_signatures)}",
+        )
+    )
+    tenant_q = f"?tenant_id={tenant_scope}" if tenant_scope else ""
+    return RedirectResponse(url=f"/ui/ai/policies{tenant_q}", status_code=303)
+
+
+@app.post("/ui/ai/policies/{policy_id}/delete")
+def ui_ai_policy_center_delete(policy_id: str, tenant_id: str = Form("")) -> RedirectResponse:
+    tenant_scope = tenant_id.strip() or None
+    try:
+        service.delete_ai_log_policy(policy_id.strip(), tenant_id=tenant_scope)
+        service.add_ai_log_policy_audit(
+            LogAnalyticsPolicyAuditEntry(
+                ts=int(time.time()),
+                policy_id=policy_id.strip(),
+                tenant_id=tenant_scope,
+                action="delete",
+                actor_role="ui",
+                details="deleted via UI",
+            )
+        )
+    except KeyError:
+        pass
+
+    tenant_q = f"?tenant_id={tenant_scope}" if tenant_scope else ""
+    return RedirectResponse(url=f"/ui/ai/policies{tenant_q}", status_code=303)
 
 @app.get("/ui/events", response_class=HTMLResponse)
 def ui_events() -> str:
@@ -2051,7 +2204,7 @@ def dashboard(
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/ai'>AI Analytics</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/ai'>AI Analytics</a><a href='/ui/ai/policies'>AI Policies</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
         </div>
       </div>
       <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>

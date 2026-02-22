@@ -491,6 +491,7 @@ def test_dashboard_includes_worker_health_widget() -> None:
     assert "worker-health" in resp.text
     assert "flt-role" in resp.text
     assert "AI Analytics" in resp.text
+    assert "AI Policies" in resp.text
     assert "nav-collectors" in resp.text
     assert "/worker/health" in resp.text
 
@@ -498,6 +499,46 @@ def test_dashboard_includes_worker_health_widget() -> None:
 
 
 
+
+
+
+def test_ui_ai_policy_center_crud_and_dry_run() -> None:
+    client.post(
+        "/assets",
+        json={"id": "ui-pol-asset", "name": "ui-pol-asset", "asset_type": "server", "location": "R3"},
+    )
+    client.post(
+        "/events",
+        json={
+            "asset_id": "ui-pol-asset",
+            "source": "syslog",
+            "message": "CRITICAL timeout from backend",
+            "severity": "critical",
+        },
+    )
+
+    save = client.post(
+        "/ui/ai/policies",
+        data={
+            "policy_id": "ui-pol-1",
+            "name": "UI policy",
+            "tenant_id": "",
+            "ignore_sources": "syslog",
+            "ignore_signatures": "",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert save.status_code == 303
+
+    page = client.get("/ui/ai/policies?policy_id=ui-pol-1&asset_id=ui-pol-asset")
+    assert page.status_code == 200
+    assert "AI policy center" in page.text
+    assert "ui-pol-1" in page.text
+    assert "Dry-run result" in page.text
+
+    delete = client.post("/ui/ai/policies/ui-pol-1/delete", data={"tenant_id": ""}, follow_redirects=False)
+    assert delete.status_code == 303
 
 def test_ui_ai_analytics_center_page() -> None:
     client.post(
