@@ -537,6 +537,7 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     assert "ui-pol-1" in page.text
     assert "Dry-run result" in page.text
     assert "%" in page.text
+    assert "mode=" in page.text
     assert "Top impacted clusters" in page.text
     assert "Severity mix" in page.text
     assert "Impact score" in page.text
@@ -1823,7 +1824,41 @@ def test_ai_log_policy_dry_run_endpoint() -> None:
     assert data["top_impacted_clusters"][0]["cluster_id"].startswith("cl-")
     assert isinstance(data["top_impacted_clusters"][0]["severity_mix"], dict)
     assert data["top_impacted_clusters"][0]["impact_score"] >= 1.0
+    assert data["impact_mode"] == "weighted"
 
+
+
+
+def test_ai_log_policy_dry_run_impact_mode_controls() -> None:
+    client.post(
+        "/ai-log-analytics/policies",
+        json={"id": "pol-mode", "name": "mode", "ignore_sources": ["linux"], "ignore_signatures": [], "enabled": True},
+    )
+    client.post("/assets", json={"id": "mode-asset", "name": "mode-asset", "asset_type": "server", "location": "R20"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "mode-asset", "source": "linux", "message": "timeout warning", "severity": "warning"},
+                {"asset_id": "mode-asset", "source": "linux", "message": "timeout critical", "severity": "critical"},
+            ]
+        },
+    )
+
+    crit = client.get(
+        "/assets/mode-asset/ai-log-analytics/policy-dry-run",
+        params={"policy_id": "pol-mode", "impact_mode": "critical_only"},
+    )
+    assert crit.status_code == 200
+    data = crit.json()
+    assert data["impact_mode"] == "critical_only"
+    assert data["top_impacted_clusters"][0]["impact_score"] >= 1.0
+
+    bad = client.get(
+        "/assets/mode-asset/ai-log-analytics/policy-dry-run",
+        params={"policy_id": "pol-mode", "impact_mode": "bad"},
+    )
+    assert bad.status_code == 422
 
 def test_ai_log_policy_merge_strategy_validation() -> None:
     client.post("/assets", json={"id": "merge-val", "name": "merge-val", "asset_type": "server", "location": "R18"})

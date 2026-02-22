@@ -258,6 +258,7 @@ class MonitoringService:
         merge_strategy: PolicyMergeStrategy | str = PolicyMergeStrategy.union,
         limit: int = 300,
         tenant_id: str | None = None,
+        impact_mode: str = "weighted",
     ) -> LogAnalyticsPolicyDryRun:
         if not self.storage.asset_exists(asset_id):
             raise KeyError(f"Unknown asset '{asset_id}'")
@@ -271,6 +272,10 @@ class MonitoringService:
             tenant_id=tenant_id,
         )
 
+        mode = str(impact_mode).strip().lower() or "weighted"
+        if mode not in {"weighted", "critical_only"}:
+            raise ValueError("Unknown impact_mode. Allowed values: weighted, critical_only")
+
         events = list(reversed(self.list_events(asset_id, limit=limit)))
         filtered = 0
         impacted_counter: Counter[tuple[str, str]] = Counter()
@@ -283,9 +288,15 @@ class MonitoringService:
                 impacted_counter[key] += 1
                 impacted_severity[key][event.severity.value] += 1
 
+        def _impact_score(key: tuple[str, str]) -> float:
+            mix = impacted_severity[key]
+            if mode == "critical_only":
+                return float(mix.get("critical", 0))
+            return float((mix.get("critical", 0) * 3) + (mix.get("warning", 0) * 2) + (mix.get("info", 0) * 1))
+
         top_impacted = sorted(
             impacted_counter.items(),
-            key=lambda item: (item[1], item[0][0], item[0][1]),
+            key=lambda item: (_impact_score(item[0]), item[1], item[0][0], item[0][1]),
             reverse=True,
         )[:10]
 
@@ -313,6 +324,7 @@ class MonitoringService:
                 )
                 for (source, signature), count in top_impacted
             ],
+            impact_mode=mode,
         )
 
     def build_log_analytics(

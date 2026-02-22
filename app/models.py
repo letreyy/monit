@@ -207,6 +207,7 @@ class LogAnalyticsPolicyDryRun(BaseModel):
     applied_sources: list[str] = Field(default_factory=list)
     applied_signatures: list[str] = Field(default_factory=list)
     top_impacted_clusters: list[LogAnalyticsDryRunImpact] = Field(default_factory=list)
+    impact_mode: str = "weighted"
 
 
 class LogAnalyticsAssetSummary(BaseModel):

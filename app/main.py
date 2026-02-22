@@ -1080,6 +1080,7 @@ def ui_ai_policy_center(
     audit_offset: int = 0,
     audit_limit: int = 20,
     audit_page: int = 1,
+    impact_mode: str = "weighted",
 ) -> str:
     tenant_scope = tenant_id.strip() or None
     selected_policy_id = policy_id.strip()
@@ -1139,11 +1140,16 @@ def ui_ai_policy_center(
     ]
     audit_csv_query = "&".join(item for item in audit_csv_params if item)
 
+    impact_mode_norm = impact_mode.strip().lower() or "weighted"
+    if impact_mode_norm not in {"weighted", "critical_only"}:
+        impact_mode_norm = "weighted"
+
     ui_filter_params = [
         f"tenant_id={tenant_scope}" if tenant_scope else "",
         f"policy_id={selected_policy_id}" if selected_policy_id else "",
         f"asset_id={selected_asset_id}" if selected_asset_id else "",
         f"merge_strategy={merge_strategy.value if isinstance(merge_strategy, PolicyMergeStrategy) else str(merge_strategy)}",
+        f"impact_mode={impact_mode_norm}",
         f"audit_action={audit_action_norm}" if audit_action_norm else "",
         f"audit_policy_id={audit_policy_id_norm}" if audit_policy_id_norm else "",
         f"audit_min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
@@ -1209,6 +1215,7 @@ def ui_ai_policy_center(
                 policy_id=selected_policy_id,
                 merge_strategy=merge_strategy,
                 tenant_id=tenant_scope,
+                impact_mode=impact_mode_norm,
             )
             impact_rows = "".join(
                 f"<tr><td>{item.cluster_id}</td><td>{item.source}</td><td>{item.events_filtered}</td><td>{item.severity_mix}</td><td>{item.impact_score}</td><td>{item.signature}</td></tr>"
@@ -1217,7 +1224,7 @@ def ui_ai_policy_center(
             dry_run_html = (
                 f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
                 f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events} ({int(dry_run.filtered_share*100)}%), remaining={dry_run.remaining_events} ({int(dry_run.remaining_share*100)}%)"
-                f"<br/><span style='font-size:12px;color:#64748b'>sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
+                f"<br/><span style='font-size:12px;color:#64748b'>mode={dry_run.impact_mode} | sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
                 f"<div style='margin-top:10px'><b>Top impacted clusters</b></div>"
                 f"<table border='0' cellpadding='6' cellspacing='0' style='width:100%;margin-top:6px;background:#fff;border:1px solid #e2e8f0'>"
                 f"<thead><tr><th>Cluster</th><th>Source</th><th>Filtered events</th><th>Severity mix</th><th>Impact score</th><th>Signature</th></tr></thead><tbody>{impact_rows}</tbody></table>"
@@ -1267,6 +1274,12 @@ def ui_ai_policy_center(
           <select name='merge_strategy'>
             <option value='union' {'selected' if merge_strategy == PolicyMergeStrategy.union else ''}>union</option>
             <option value='intersection' {'selected' if merge_strategy == PolicyMergeStrategy.intersection else ''}>intersection</option>
+          </select>
+        </label>
+        <label style='margin-left:10px'>Impact mode
+          <select name='impact_mode'>
+            <option value='weighted' {'selected' if impact_mode_norm == 'weighted' else ''}>weighted</option>
+            <option value='critical_only' {'selected' if impact_mode_norm == 'critical_only' else ''}>critical_only</option>
           </select>
         </label>
         <button type='submit'>Run dry-run</button>
@@ -2695,6 +2708,7 @@ def ai_log_policy_dry_run(
     policy_id: str | None = None,
     policy_ids: str = "",
     policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    impact_mode: str = "weighted",
     tenant_id: str | None = None,
 ) -> LogAnalyticsPolicyDryRun:
     if not _asset_exists(asset_id):
@@ -2717,9 +2731,12 @@ def ai_log_policy_dry_run(
             merge_strategy=policy_merge_strategy,
             limit=min(max(limit, 20), 2000),
             tenant_id=tenant_scope,
+            impact_mode=impact_mode,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/ai-log-analytics/overview", response_model=LogAnalyticsOverview)
@@ -2753,6 +2770,8 @@ def get_ai_log_analytics_overview(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return service.build_log_analytics_overview(
         limit_per_asset=min(max(limit_per_asset, 20), 2000),
