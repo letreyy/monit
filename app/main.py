@@ -1046,6 +1046,13 @@ def ui_ai_policy_center(
     policy_id: str = "",
     asset_id: str = "",
     merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    audit_action: str = "",
+    audit_policy_id: str = "",
+    audit_min_ts: str = "",
+    audit_max_ts: str = "",
+    audit_sort: str = "desc",
+    audit_offset: int = 0,
+    audit_limit: int = 20,
 ) -> str:
     tenant_scope = tenant_id.strip() or None
     selected_policy_id = policy_id.strip()
@@ -1057,11 +1064,40 @@ def ui_ai_policy_center(
         for item in policies
     ) or "<tr><td colspan='7'>No policies yet.</td></tr>"
 
-    audit_rows = service.list_ai_log_policy_audit(limit=20, tenant_id=tenant_scope)
+    audit_action_norm = audit_action.strip() or None
+    audit_policy_id_norm = audit_policy_id.strip() or None
+    audit_min_ts_norm = int(audit_min_ts.strip()) if audit_min_ts.strip().isdigit() else None
+    audit_max_ts_norm = int(audit_max_ts.strip()) if audit_max_ts.strip().isdigit() else None
+    audit_sort_norm = audit_sort.strip().lower()
+    if audit_sort_norm not in {"asc", "desc"}:
+        audit_sort_norm = "desc"
+
+    audit_rows = service.list_ai_log_policy_audit(
+        limit=min(max(audit_limit, 1), 200),
+        tenant_id=tenant_scope,
+        action=audit_action_norm,
+        policy_id=audit_policy_id_norm,
+        min_ts=audit_min_ts_norm,
+        max_ts=audit_max_ts_norm,
+        sort=audit_sort_norm,
+        offset=max(0, audit_offset),
+    )
     audit_html = "".join(
-        f"<tr><td>{row.ts}</td><td>{row.policy_id}</td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
+        f"<tr><td>{row.ts}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&audit_policy_id={row.policy_id}'>{row.policy_id}</a></td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
         for row in audit_rows
     ) or "<tr><td colspan='5'>No audit rows.</td></tr>"
+
+    audit_csv_params = [
+        f"tenant_id={tenant_scope}" if tenant_scope else "",
+        f"action={audit_action_norm}" if audit_action_norm else "",
+        f"policy_id={audit_policy_id_norm}" if audit_policy_id_norm else "",
+        f"min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
+        f"max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
+        f"sort={audit_sort_norm}",
+        f"offset={max(0, audit_offset)}",
+        f"limit={min(max(audit_limit, 1), 200)}",
+    ]
+    audit_csv_query = "&".join(item for item in audit_csv_params if item)
 
     dry_run_html = ""
     if selected_policy_id and selected_asset_id:
@@ -1129,6 +1165,23 @@ def ui_ai_policy_center(
       {dry_run_html}
 
       <h3>Recent policy audit</h3>
+      <form method='get' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:10px'>
+        <input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/>
+        <label>Action <input name='audit_action' value='{audit_action_norm or ''}' placeholder='upsert/delete'/></label>
+        <label style='margin-left:10px'>Policy <input name='audit_policy_id' value='{audit_policy_id_norm or ''}'/></label>
+        <label style='margin-left:10px'>Min ts <input name='audit_min_ts' value='{audit_min_ts_norm or ''}'/></label>
+        <label style='margin-left:10px'>Max ts <input name='audit_max_ts' value='{audit_max_ts_norm or ''}'/></label>
+        <label style='margin-left:10px'>Sort
+          <select name='audit_sort'>
+            <option value='desc' {'selected' if audit_sort_norm == 'desc' else ''}>desc</option>
+            <option value='asc' {'selected' if audit_sort_norm == 'asc' else ''}>asc</option>
+          </select>
+        </label>
+        <label style='margin-left:10px'>Offset <input name='audit_offset' type='number' min='0' value='{max(0, audit_offset)}'/></label>
+        <label style='margin-left:10px'>Limit <input name='audit_limit' type='number' min='1' max='200' value='{min(max(audit_limit, 1), 200)}'/></label>
+        <button type='submit'>Apply audit filters</button>
+        <a href='/ai-log-analytics/policies/audit.csv?{audit_csv_query}' style='margin-left:10px'>Export CSV</a>
+      </form>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
         <tbody>{audit_html}</tbody>

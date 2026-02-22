@@ -540,6 +540,36 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     delete = client.post("/ui/ai/policies/ui-pol-1/delete", data={"tenant_id": ""}, follow_redirects=False)
     assert delete.status_code == 303
 
+
+def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
+    save = client.post(
+        "/ui/ai/policies",
+        data={
+            "policy_id": "ui-pol-audit",
+            "name": "UI policy audit",
+            "tenant_id": "",
+            "ignore_sources": "syslog",
+            "ignore_signatures": "",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert save.status_code == 303
+
+    page = client.get(
+        "/ui/ai/policies",
+        params={
+            "audit_action": "upsert",
+            "audit_policy_id": "ui-pol-audit",
+            "audit_sort": "asc",
+            "audit_limit": 10,
+        },
+    )
+    assert page.status_code == 200
+    assert "Apply audit filters" in page.text
+    assert "/ai-log-analytics/policies/audit.csv?action=upsert" in page.text
+    assert "policy_id=ui-pol-audit" in page.text
+
 def test_ui_ai_analytics_center_page() -> None:
     client.post(
         "/assets",
