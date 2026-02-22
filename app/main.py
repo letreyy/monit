@@ -1134,11 +1134,10 @@ def ui_ai_policy_center(
     page_links = []
     for page in range(page_start, page_end + 1):
         page_offset = (page - 1) * limit_norm
-        marker = "<b>" if page == current_page else ""
-        marker_close = "</b>" if page == current_page else ""
-        page_links.append(
-            f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={page_offset}'>{marker}{page}{marker_close}</a>"
-        )
+        if page == current_page:
+            page_links.append(f"<span style='color:#0f172a;font-weight:700'>{page}</span>")
+        else:
+            page_links.append(f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={page_offset}'>{page}</a>")
     page_links_html = " | ".join(page_links)
     last_page = max(1, (total_audit_rows + limit_norm - 1) // limit_norm)
     last_offset = max(0, (last_page - 1) * limit_norm)
@@ -1146,27 +1145,27 @@ def ui_ai_policy_center(
     first_link = (
         f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset=0' style='margin-left:10px'>⏮ First</a>"
         if current_page > 1
-        else "<span style='margin-left:10px;color:#94a3b8'>⏮ First</span>"
+        else "<span style='margin-left:10px;color:#94a3b8' title='Already at first page'>⏮ First</span>"
     )
     prev_link = (
         f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}' style='margin-left:10px'>◀ Prev</a>"
         if current_page > 1
-        else "<span style='margin-left:10px;color:#94a3b8'>◀ Prev</span>"
+        else "<span style='margin-left:10px;color:#94a3b8' title='Already at first page'>◀ Prev</span>"
     )
     next_link = (
         f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}' style='margin-left:10px'>Next ▶</a>"
         if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8'>Next ▶</span>"
+        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>Next ▶</span>"
     )
     jump_link = (
         f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}' style='margin-left:10px'>Jump +5 pages</a>"
         if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8'>Jump +5 pages</span>"
+        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>Jump +5 pages</span>"
     )
     last_link = (
         f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}' style='margin-left:10px'>⏭ Last</a>"
         if current_page < last_page
-        else "<span style='margin-left:10px;color:#94a3b8'>⏭ Last</span>"
+        else "<span style='margin-left:10px;color:#94a3b8' title='Already at last page'>⏭ Last</span>"
     )
 
     api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"

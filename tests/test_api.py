@@ -556,6 +556,7 @@ def test_ui_ai_policy_center_audit_nav_disabled_on_first_page() -> None:
     assert page.status_code == 200
     assert "⏮ First</span>" in page.text
     assert "◀ Prev</span>" in page.text
+    assert "Already at first page" in page.text
 
 def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     save = client.post(
@@ -587,10 +588,11 @@ def test_ui_ai_policy_center_audit_filters_and_csv_link() -> None:
     assert "/ai-log-analytics/policies/audit?action=upsert" in page.text
     assert "/ai-log-analytics/policies/audit.csv?action=upsert" in page.text
     assert "Pages:" in page.text
+    assert "<span style='color:#0f172a;font-weight:700'>2</span>" in page.text
     assert "audit_offset=0" in page.text
-    assert "audit_offset=10" in page.text
     assert "Jump +5 pages" in page.text
     assert "⏭ Last" in page.text
+    assert "Already at last page" in page.text
     assert "total rows:" in page.text
     assert "Copy API URL" in page.text
     assert "API URL for current filters" in page.text
