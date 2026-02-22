@@ -1040,14 +1040,24 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
 
 
 
-def _format_policy_snapshot(policy: LogAnalyticsPolicy | None) -> str:
+def _policy_snapshot_dict(policy: LogAnalyticsPolicy | None) -> dict[str, object] | None:
     if policy is None:
-        return "none"
-    return (
-        f"name={policy.name};tenant={policy.tenant_id or '-'};enabled={policy.enabled};"
-        f"sources={','.join(sorted(policy.ignore_sources)) or '-'};"
-        f"signatures={','.join(sorted(policy.ignore_signatures)) or '-'}"
-    )
+        return None
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "tenant_id": policy.tenant_id,
+        "enabled": policy.enabled,
+        "ignore_sources": sorted(policy.ignore_sources),
+        "ignore_signatures": sorted(policy.ignore_signatures),
+    }
+
+
+def _build_policy_audit_details(action: str, before: LogAnalyticsPolicy | None, after: LogAnalyticsPolicy | None = None) -> str:
+    payload: dict[str, object] = {"action": action, "before": _policy_snapshot_dict(before)}
+    if after is not None:
+        payload["after"] = _policy_snapshot_dict(after)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
 def _render_audit_nav_link(label: str, href: str, enabled: bool, disabled_hint: str, margin_left: str = "10px") -> str:
@@ -1201,16 +1211,16 @@ def ui_ai_policy_center(
                 tenant_id=tenant_scope,
             )
             impact_rows = "".join(
-                f"<tr><td>{item.cluster_id}</td><td>{item.source}</td><td>{item.events_filtered}</td><td>{item.severity_mix}</td><td>{item.signature}</td></tr>"
+                f"<tr><td>{item.cluster_id}</td><td>{item.source}</td><td>{item.events_filtered}</td><td>{item.severity_mix}</td><td>{item.impact_score}</td><td>{item.signature}</td></tr>"
                 for item in dry_run.top_impacted_clusters
-            ) or "<tr><td colspan='5'>No impacted clusters.</td></tr>"
+            ) or "<tr><td colspan='6'>No impacted clusters.</td></tr>"
             dry_run_html = (
                 f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
                 f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events} ({int(dry_run.filtered_share*100)}%), remaining={dry_run.remaining_events} ({int(dry_run.remaining_share*100)}%)"
                 f"<br/><span style='font-size:12px;color:#64748b'>sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
                 f"<div style='margin-top:10px'><b>Top impacted clusters</b></div>"
                 f"<table border='0' cellpadding='6' cellspacing='0' style='width:100%;margin-top:6px;background:#fff;border:1px solid #e2e8f0'>"
-                f"<thead><tr><th>Cluster</th><th>Source</th><th>Filtered events</th><th>Severity mix</th><th>Signature</th></tr></thead><tbody>{impact_rows}</tbody></table>"
+                f"<thead><tr><th>Cluster</th><th>Source</th><th>Filtered events</th><th>Severity mix</th><th>Impact score</th><th>Signature</th></tr></thead><tbody>{impact_rows}</tbody></table>"
                 f"</div>"
             )
         except KeyError as exc:
@@ -1342,7 +1352,7 @@ def ui_ai_policy_center_upsert(
             tenant_id=stored.tenant_id,
             action="upsert",
             actor_role="ui",
-            details=f"before=[{_format_policy_snapshot(before)}];after=[{_format_policy_snapshot(stored)}]",
+            details=_build_policy_audit_details("upsert", before=before, after=stored),
         )
     )
     tenant_q = f"?tenant_id={tenant_scope}" if tenant_scope else ""
@@ -1362,7 +1372,7 @@ def ui_ai_policy_center_delete(policy_id: str, tenant_id: str = Form("")) -> Red
                 tenant_id=tenant_scope,
                 action="delete",
                 actor_role="ui",
-                details=f"deleted;before=[{_format_policy_snapshot(before)}]",
+                details=_build_policy_audit_details("delete", before=before),
             )
         )
     except KeyError:
@@ -2584,7 +2594,7 @@ def upsert_ai_log_policy(request: Request, policy: LogAnalyticsPolicy, tenant_id
             tenant_id=stored.tenant_id,
             action="upsert",
             actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
-            details=f"before=[{_format_policy_snapshot(before)}];after=[{_format_policy_snapshot(stored)}]",
+            details=_build_policy_audit_details("upsert", before=before, after=stored),
         )
     )
     return stored
@@ -2603,7 +2613,7 @@ def delete_ai_log_policy(request: Request, policy_id: str, tenant_id: str | None
                 tenant_id=tenant_scope,
                 action="delete",
                 actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
-                details=f"deleted;before=[{_format_policy_snapshot(before)}]",
+                details=_build_policy_audit_details("delete", before=before),
             )
         )
     except KeyError as exc:

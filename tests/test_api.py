@@ -539,6 +539,7 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
     assert "%" in page.text
     assert "Top impacted clusters" in page.text
     assert "Severity mix" in page.text
+    assert "Impact score" in page.text
 
     delete = client.post("/ui/ai/policies/ui-pol-1/delete", data={"tenant_id": ""}, follow_redirects=False)
     assert delete.status_code == 303
@@ -1821,6 +1822,7 @@ def test_ai_log_policy_dry_run_endpoint() -> None:
     assert data["top_impacted_clusters"][0]["events_filtered"] >= 1
     assert data["top_impacted_clusters"][0]["cluster_id"].startswith("cl-")
     assert isinstance(data["top_impacted_clusters"][0]["severity_mix"], dict)
+    assert data["top_impacted_clusters"][0]["impact_score"] >= 1.0
 
 
 def test_ai_log_policy_merge_strategy_validation() -> None:
@@ -1896,8 +1898,8 @@ def test_ai_log_policy_audit_entries() -> None:
     rows = audit.json()
     assert any(row["policy_id"] == "pol-audit" and row["action"] == "upsert" for row in rows)
     assert any(row["policy_id"] == "pol-audit" and row["action"] == "delete" for row in rows)
-    assert any("before=[" in row["details"] and "after=[" in row["details"] for row in rows if row["action"] == "upsert")
-    assert any("deleted;before=[" in row["details"] for row in rows if row["action"] == "delete")
+    assert any("\"before\"" in row["details"] and "\"after\"" in row["details"] for row in rows if row["action"] == "upsert")
+    assert any("\"action\": \"delete\"" in row["details"] and "\"before\"" in row["details"] for row in rows if row["action"] == "delete")
 
 
 def test_ai_log_policy_audit_filters_and_csv() -> None:

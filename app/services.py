@@ -309,6 +309,7 @@ class MonitoringService:
                     cluster_id=self._cluster_id(source, signature),
                     events_filtered=count,
                     severity_mix=dict(impacted_severity[(source, signature)]),
+                    impact_score=round(_impact_score((source, signature)), 3),
                 )
                 for (source, signature), count in top_impacted
             ],
