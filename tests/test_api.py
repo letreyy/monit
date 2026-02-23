@@ -124,6 +124,16 @@ def test_ui_collector_target_flow() -> None:
     assert api_page.json()[0]["snmp_community"] == "********"
 
 
+
+def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
+    page = client.get("/ui/collectors")
+    assert page.status_code == 200
+    assert "id='collector-type-select'" in page.text
+    assert "data-collector-scope='winrm'" in page.text
+    assert "data-collector-scope='ssh' style='display:none" in page.text
+    assert "data-collector-scope='snmp' style='display:none" in page.text
+    assert "toggleCollectorFields()" in page.text
+
 def test_worker_run_once_and_state() -> None:
     client.post(
         "/assets",

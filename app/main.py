@@ -761,7 +761,7 @@ def ui_collectors() -> str:
         <label>ID <input name='target_id' required /></label><br/><br/>
         <label>Name <input name='name' required /></label><br/><br/>
         <label>Type
-          <select name='collector_type'>
+          <select name='collector_type' id='collector-type-select' onchange='toggleCollectorFields()'>
             <option value='winrm'>winrm (Windows)</option>
             <option value='ssh'>ssh (Linux/Unix)</option>
             <option value='snmp'>snmp (Network/Storage)</option>
@@ -771,28 +771,40 @@ def ui_collectors() -> str:
         <label>Port <input name='port' type='number' value='5985' required /></label><br/><br/>
         <label>Username <input name='username' required /></label><br/><br/>
         <label>Password <input name='password' type='password' required /></label><br/><br/>
-        <label>WinRM transport
-          <select name='winrm_transport'>
-            <option value='ntlm'>ntlm</option>
-            <option value='basic'>basic</option>
-            <option value='kerberos'>kerberos</option>
-          </select>
-        </label><br/><br/>
-        <label>WinRM logs (comma separated) <input name='winrm_event_logs' value='System,Application' /></label><br/><br/>
-        <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
-        <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
-        <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label><br/><br/>
-        <label>SSH metrics command <input name='ssh_metrics_command' value='cat /proc/loadavg' /></label><br/><br/>
-        <label>SSH log path <input name='ssh_log_path' value='/var/log/syslog' /></label><br/><br/>
-        <label>SSH tail lines <input name='ssh_tail_lines' type='number' value='50' min='1' max='500' /></label><br/><br/>
-        <label>SNMP community <input name='snmp_community' value='public' /></label><br/><br/>
-        <label>SNMP version
-          <select name='snmp_version'>
-            <option value='2c'>2c</option>
-            <option value='3'>3</option>
-          </select>
-        </label><br/><br/>
-        <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label><br/><br/>
+
+        <div data-collector-scope='winrm' style='padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>WinRM settings</b><br/><br/>
+          <label>WinRM transport
+            <select name='winrm_transport'>
+              <option value='ntlm'>ntlm</option>
+              <option value='basic'>basic</option>
+              <option value='kerberos'>kerberos</option>
+            </select>
+          </label><br/><br/>
+          <label>WinRM logs (comma separated) <input name='winrm_event_logs' value='System,Application' /></label><br/><br/>
+          <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
+          <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
+          <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label>
+        </div>
+
+        <div data-collector-scope='ssh' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>SSH settings</b><br/><br/>
+          <label>SSH metrics command <input name='ssh_metrics_command' value='cat /proc/loadavg' /></label><br/><br/>
+          <label>SSH log path <input name='ssh_log_path' value='/var/log/syslog' /></label><br/><br/>
+          <label>SSH tail lines <input name='ssh_tail_lines' type='number' value='50' min='1' max='500' /></label>
+        </div>
+
+        <div data-collector-scope='snmp' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>SNMP settings</b><br/><br/>
+          <label>SNMP community <input name='snmp_community' value='public' /></label><br/><br/>
+          <label>SNMP version
+            <select name='snmp_version'>
+              <option value='2c'>2c</option>
+              <option value='3'>3</option>
+            </select>
+          </label><br/><br/>
+          <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
+        </div>
         <label>Asset
           <select name='asset_id' required>{asset_options}</select>
         </label><br/><br/>
@@ -806,6 +818,16 @@ def ui_collectors() -> str:
         <tbody>{rows_html}</tbody>
       </table>
       <p><i>Next step: scheduler/worker will auto-poll enabled targets using these settings.</i></p>
+      <script>
+        function toggleCollectorFields() {{
+          const select = document.getElementById('collector-type-select');
+          const type = select ? select.value : 'winrm';
+          document.querySelectorAll('[data-collector-scope]').forEach((el) => {{
+            el.style.display = el.getAttribute('data-collector-scope') === type ? 'block' : 'none';
+          }});
+        }}
+        toggleCollectorFields();
+      </script>
     </body></html>
     """
 
