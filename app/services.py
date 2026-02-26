@@ -17,11 +17,13 @@ from app.models import (
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditEntry,
     LogAnalyticsPolicyDryRun,
+    LogAnalyticsRunbookHints,
     LogAnalyticsDryRunImpact,
     PolicyMergeStrategy,
     LogAnomaly,
     LogCluster,
     Recommendation,
+    RunbookHint,
     Severity,
     WorkerHistoryEntry,
 )
@@ -585,6 +587,44 @@ class MonitoringService:
             )
 
         return insights
+
+    def build_log_runbook_hints(self, asset_id: str, limit: int = 300) -> LogAnalyticsRunbookHints:
+        if not self.storage.asset_exists(asset_id):
+            raise KeyError(f"Unknown asset '{asset_id}'")
+
+        hints: list[RunbookHint] = []
+        analytics = self.build_log_analytics(asset_id, limit=limit, max_clusters=15, max_anomalies=15)
+        for anomaly in analytics.anomalies[:5]:
+            hints.append(
+                RunbookHint(
+                    title=f"{anomaly.kind}: {anomaly.severity.value}",
+                    rationale=anomaly.reason,
+                    action=f"Проверить runbook для паттерна '{anomaly.kind}' и верифицировать источник: {anomaly.related_cluster_id or anomaly.related_metric or 'n/a'}.",
+                    confidence=round(anomaly.confidence, 2),
+                )
+            )
+
+        for insight in self.build_correlation_insights(asset_id):
+            hints.append(
+                RunbookHint(
+                    title=insight.title,
+                    rationale=f"Correlation evidence count: {insight.evidence_count}",
+                    action=insight.recommendation,
+                    confidence=round(insight.confidence, 2),
+                )
+            )
+
+        if not hints:
+            hints.append(
+                RunbookHint(
+                    title="No critical patterns",
+                    rationale="No high-confidence anomalies or correlations in current window.",
+                    action="Продолжать мониторинг, сверять тренды ежедневно, поддерживать базовый runbook-check.",
+                    confidence=0.4,
+                )
+            )
+
+        return LogAnalyticsRunbookHints(asset_id=asset_id, hints=hints[:10])
 
     def build_recommendation(self, asset_id: str) -> Recommendation:
         if not self.storage.asset_exists(asset_id):

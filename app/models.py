@@ -246,6 +246,18 @@ class LogAnalyticsOverview(BaseModel):
     assets: list[LogAnalyticsAssetSummary]
 
 
+class RunbookHint(BaseModel):
+    title: str
+    rationale: str
+    action: str
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+
+
+class LogAnalyticsRunbookHints(BaseModel):
+    asset_id: str
+    hints: list[RunbookHint] = Field(default_factory=list)
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

@@ -639,6 +639,7 @@ def test_ui_ai_analytics_center_page() -> None:
     assert resp.status_code == 200
     assert "AI analytics center" in resp.text
     assert "Selected asset anomalies" in resp.text
+    assert "Runbook hints (explainable)" in resp.text
     assert "ui-ai-1" in resp.text
 
 def test_dashboard_data_endpoint_shape() -> None:
@@ -1884,6 +1885,29 @@ def test_ai_log_policy_dry_run_impact_mode_controls() -> None:
     )
     assert bad.status_code == 422
     assert "critical_warning" in bad.json()["detail"]
+
+def test_ai_log_runbook_hints_endpoint() -> None:
+    client.post("/assets", json={"id": "rb-asset", "name": "rb-asset", "asset_type": "server", "location": "R30"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "rb-asset", "source": "windows_eventlog", "message": "EventID=4625 failed login", "severity": "warning"},
+                {"asset_id": "rb-asset", "source": "windows_eventlog", "message": "EventID=4625 failed login", "severity": "warning"},
+                {"asset_id": "rb-asset", "source": "windows_eventlog", "message": "EventID=4625 failed login", "severity": "warning"},
+                {"asset_id": "rb-asset", "source": "windows_eventlog", "message": "EventID=4625 failed login", "severity": "warning"},
+                {"asset_id": "rb-asset", "source": "windows_eventlog", "message": "EventID=4625 failed login", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/assets/rb-asset/ai-log-analytics/runbook-hints")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["asset_id"] == "rb-asset"
+    assert len(data["hints"]) >= 1
+    assert "action" in data["hints"][0]
+
 
 def test_ai_log_policy_merge_strategy_validation() -> None:
     client.post("/assets", json={"id": "merge-val", "name": "merge-val", "asset_type": "server", "location": "R18"})

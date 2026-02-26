@@ -33,6 +33,7 @@ from app.models import (
     EventBatch,
     IngestSummary,
     LogAnalyticsInsight,
+    LogAnalyticsRunbookHints,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditDetails,
@@ -1000,6 +1001,7 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
     selected_asset = requested_asset_id or (tenant_assets[0].id if tenant_assets else "")
 
     rows: list[str] = []
+    runbook_rows: list[str] = []
     if selected_asset and any(asset.id == selected_asset for asset in tenant_assets):
         insight = service.build_log_analytics(
             selected_asset,
@@ -1012,8 +1014,14 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
             rows.append(
                 f"<tr><td>{anomaly.kind}</td><td>{anomaly.severity.value}</td><td>{anomaly.confidence}</td><td>{anomaly.reason}</td><td>{evidence}</td></tr>"
             )
+        runbook_hints = service.build_log_runbook_hints(selected_asset, limit=min(max(limit_per_asset, 20), 2000))
+        for hint in runbook_hints.hints:
+            runbook_rows.append(
+                f"<tr><td>{hint.title}</td><td>{hint.confidence}</td><td>{hint.rationale}</td><td>{hint.action}</td></tr>"
+            )
 
     anomaly_rows = "".join(rows) if rows else "<tr><td colspan='5'>No anomalies for selected asset.</td></tr>"
+    runbook_rows_html = "".join(runbook_rows) if runbook_rows else "<tr><td colspan='4'>No runbook hints for selected asset.</td></tr>"
     options = "".join(
         f"<option value='{asset.id}' {'selected' if asset.id == selected_asset else ''}>{asset.id} ({asset.name})</option>"
         for asset in tenant_assets
@@ -1058,6 +1066,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>Kind</th><th>Severity</th><th>Confidence</th><th>Reason</th><th>Evidence</th></tr></thead>
         <tbody>{anomaly_rows}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Runbook hints (explainable)</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Hint</th><th>Confidence</th><th>Rationale</th><th>Suggested action</th></tr></thead>
+        <tbody>{runbook_rows_html}</tbody>
       </table>
     </body></html>
     """
@@ -2930,6 +2944,24 @@ def get_ai_log_analytics(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/assets/{asset_id}/ai-log-analytics/runbook-hints", response_model=LogAnalyticsRunbookHints)
+def get_ai_log_runbook_hints(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    tenant_id: str | None = None,
+) -> LogAnalyticsRunbookHints:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_log_runbook_hints(asset_id, limit=min(max(limit, 20), 2000))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
 def get_recommendation(request: Request, asset_id: str, tenant_id: str | None = None) -> Recommendation:
