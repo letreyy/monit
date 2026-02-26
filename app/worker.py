@@ -539,9 +539,21 @@ $events | ConvertTo-Json -Depth 4 -Compress
             result = session.run_ps(ps)
         except UnicodeEncodeError as exc:
             raise RuntimeError(
-                "WinRM credentials contain characters that cannot be encoded by the selected auth "
-                "transport. Use ASCII/Latin-1 credentials or switch transport (for example, NTLM/Kerberos)."
+                "WinRM auth transport cannot encode non-Latin credentials; use NTLM/Kerberos "
+                "or Latin-1 credentials."
             ) from exc
+        except Exception as exc:
+            message = str(exc)
+            exc_name = exc.__class__.__name__
+            if (
+                exc_name in {"ConnectTimeout", "ReadTimeout"}
+                or "ConnectTimeoutError" in message
+                or "timed out" in message.lower()
+            ):
+                raise RuntimeError(
+                    f"WinRM endpoint timeout: {target.address}:{target.port} is unreachable or slow."
+                ) from exc
+            raise
         if result.status_code != 0:
             err = (result.std_err or b"").decode("utf-8", errors="ignore")
             raise RuntimeError(f"WinRM command failed: {err.strip() or 'unknown error'}")
