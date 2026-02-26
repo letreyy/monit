@@ -7,6 +7,8 @@ from app.models import (
     AccessAuditEntry,
     DependencyMap,
     DependencyEdge,
+    DependencyMapOverview,
+    DependencyEdgeOverview,
     Alert,
     Asset,
     CollectorState,
@@ -662,6 +664,41 @@ class MonitoringService:
             total_sources=len(sources),
             total_edges=len(limited_edges),
             edges=limited_edges,
+        )
+
+    def build_dependency_map_overview(
+        self,
+        limit_per_asset: int = 300,
+        max_assets: int = 50,
+        max_edges: int = 30,
+        asset_ids: set[str] | None = None,
+    ) -> DependencyMapOverview:
+        assets = self.list_assets()
+        if asset_ids is not None:
+            assets = [asset for asset in assets if asset.id in asset_ids]
+        assets = assets[:max_assets]
+
+        rows: list[DependencyEdgeOverview] = []
+        for asset in assets:
+            dep_map = self.build_dependency_map(asset.id, limit=limit_per_asset, max_edges=max_edges)
+            for edge in dep_map.edges:
+                rows.append(
+                    DependencyEdgeOverview(
+                        asset_id=asset.id,
+                        source_a=edge.source_a,
+                        source_b=edge.source_b,
+                        shared_signatures=edge.shared_signatures,
+                        co_occurrence_score=edge.co_occurrence_score,
+                        example_signature=edge.example_signature,
+                    )
+                )
+
+        rows.sort(key=lambda item: (item.shared_signatures, item.co_occurrence_score, item.asset_id), reverse=True)
+        rows = rows[:max_edges]
+        return DependencyMapOverview(
+            assets_considered=len(assets),
+            total_edges=len(rows),
+            edges=rows,
         )
 
     def build_recommendation(self, asset_id: str) -> Recommendation:

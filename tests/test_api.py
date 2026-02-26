@@ -641,6 +641,7 @@ def test_ui_ai_analytics_center_page() -> None:
     assert "Selected asset anomalies" in resp.text
     assert "Runbook hints (explainable)" in resp.text
     assert "Dependency map (event-source co-occurrence)" in resp.text
+    assert "Cross-asset dependency hotspots" in resp.text
     assert "ui-ai-1" in resp.text
 
 def test_dashboard_data_endpoint_shape() -> None:
@@ -1931,6 +1932,30 @@ def test_ai_log_dependency_map_endpoint() -> None:
     assert data["total_sources"] >= 2
     assert data["total_edges"] >= 1
     assert data["edges"][0]["shared_signatures"] >= 1
+
+
+
+def test_ai_log_dependency_map_overview_endpoint() -> None:
+    client.post("/assets", json={"id": "dep-over-a", "name": "dep-over-a", "asset_type": "server", "location": "R32"})
+    client.post("/assets", json={"id": "dep-over-b", "name": "dep-over-b", "asset_type": "server", "location": "R33"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "dep-over-a", "source": "linux", "message": "cache miss hot", "severity": "warning"},
+                {"asset_id": "dep-over-a", "source": "app", "message": "cache miss hot", "severity": "warning"},
+                {"asset_id": "dep-over-b", "source": "db", "message": "replication lag high", "severity": "warning"},
+                {"asset_id": "dep-over-b", "source": "app", "message": "replication lag high", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/ai-log-analytics/dependency-map/overview", params={"max_edges": 5})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assets_considered"] >= 2
+    assert data["total_edges"] >= 1
+    assert "asset_id" in data["edges"][0]
 
 
 

@@ -35,6 +35,7 @@ from app.models import (
     LogAnalyticsInsight,
     LogAnalyticsRunbookHints,
     DependencyMap,
+    DependencyMapOverview,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditDetails,
@@ -1040,11 +1041,22 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         max_assets=min(max(max_assets, 1), 200),
         asset_ids={asset.id for asset in tenant_assets},
     )
+    dependency_overview = service.build_dependency_map_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_edges=10,
+        asset_ids={asset.id for asset in tenant_assets},
+    )
 
     top_assets_rows = "".join(
         f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.anomalies_total}</td><td>{item.top_severity.value if item.top_severity else '-'}</td><td>{item.top_reason or '-'}</td></tr>"
         for item in overview.assets[:10]
     ) or "<tr><td colspan='4'>No analyzed assets.</td></tr>"
+
+    dependency_overview_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={edge.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{edge.asset_id}</a></td><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
+        for edge in dependency_overview.edges
+    ) or "<tr><td colspan='6'>No cross-asset dependencies found.</td></tr>"
 
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
@@ -1068,6 +1080,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>Asset</th><th>Anomalies</th><th>Top severity</th><th>Top reason</th></tr></thead>
         <tbody>{top_assets_rows}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Cross-asset dependency hotspots</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Source A</th><th>Source B</th><th>Shared signatures</th><th>Score</th><th>Example signature</th></tr></thead>
+        <tbody>{dependency_overview_rows}</tbody>
       </table>
 
       <h2>Selected asset anomalies</h2>
@@ -2958,6 +2976,24 @@ def get_ai_log_analytics(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/ai-log-analytics/dependency-map/overview", response_model=DependencyMapOverview)
+def get_ai_log_dependency_map_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 50,
+    max_edges: int = 30,
+    tenant_id: str | None = None,
+) -> DependencyMapOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    return service.build_dependency_map_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_edges=min(max(max_edges, 1), 100),
+        asset_ids=tenant_assets,
+    )
+
 
 @app.get("/assets/{asset_id}/ai-log-analytics/dependency-map", response_model=DependencyMap)
 def get_ai_log_dependency_map(

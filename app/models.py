@@ -273,6 +273,21 @@ class DependencyMap(BaseModel):
     edges: list[DependencyEdge] = Field(default_factory=list)
 
 
+class DependencyEdgeOverview(BaseModel):
+    asset_id: str
+    source_a: str
+    source_b: str
+    shared_signatures: int = Field(..., ge=1)
+    co_occurrence_score: float = Field(0.0, ge=0.0)
+    example_signature: str = ""
+
+
+class DependencyMapOverview(BaseModel):
+    assets_considered: int = Field(..., ge=0)
+    total_edges: int = Field(..., ge=0)
+    edges: list[DependencyEdgeOverview] = Field(default_factory=list)
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

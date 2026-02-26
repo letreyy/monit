@@ -182,6 +182,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 - `GET /assets/{asset_id}/ai-log-analytics/policy-dry-run` (counts + shares + top impacted clusters/signatures + severity mix + impact score, query `impact_mode=weighted|critical_warning|critical_only`)
 - `GET /assets/{asset_id}/ai-log-analytics/runbook-hints` (explainable runbook hints derived from anomalies + correlation insights)
 - `GET /assets/{asset_id}/ai-log-analytics/dependency-map` (event-source co-occurrence map with shared signatures and score)
+- `GET /ai-log-analytics/dependency-map/overview` (cross-asset dependency hotspots, tenant-aware)
 
 ## Интерфейс и автосбор данных
 
@@ -244,7 +245,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - REST API для ассетов, событий, batch-ingest и обзорной статистики.
 - UI-формы для управления ассетами/событиями/коллекторами (в форме collector target показываются только поля выбранного типа: WinRM/SSH/SNMP).
 - UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
-- UI-страница AI analytics center (`/ui/ai`) с overview по ассетам, таблицей explainable аномалий, блоком explainable runbook hints и dependency map по выбранному asset.
+- UI-страница AI analytics center (`/ui/ai`) с overview по ассетам, таблицей explainable аномалий, блоком explainable runbook hints, dependency map по выбранному asset и cross-asset dependency hotspots.
 - UI-страница AI policy center (`/ui/ai/policies`) с CRUD-потоком policy, dry-run предпросмотром (включая filtered/remaining shares, severity mix/impact score и top impacted clusters/signatures, плюс выбор `impact_mode` (weighted/critical_warning/critical_only)), фильтрами policy-audit (в т.ч. `changed_field` + preset quick-links), quick-links в JSON/CSV audit, numbered UI-пагинацией, jump-to-page, First/Last/Prev/Next (с disabled-state и tooltip-подсказками на границах) и кнопками copy API/JSON/CSV URL для текущего filter-state.
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
