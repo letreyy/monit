@@ -36,6 +36,7 @@ from app.models import (
     LogAnalyticsRunbookHints,
     DependencyMap,
     DependencyMapOverview,
+    IncidentBrief,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditDetails,
@@ -1005,6 +1006,7 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
     rows: list[str] = []
     runbook_rows: list[str] = []
     dependency_rows: list[str] = []
+    incident_brief_html = "<li>No incident brief for selected asset.</li>"
     if selected_asset and any(asset.id == selected_asset for asset in tenant_assets):
         insight = service.build_log_analytics(
             selected_asset,
@@ -1027,6 +1029,18 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
             dependency_rows.append(
                 f"<tr><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
             )
+        incident = service.build_incident_brief(selected_asset, limit=min(max(limit_per_asset, 20), 2000))
+        brief_items = [
+            f"<li><b>Headline:</b> {incident.headline}</li>",
+            f"<li><b>Confidence:</b> {incident.confidence}</li>",
+        ]
+        if incident.anomaly_reasons:
+            brief_items.append(f"<li><b>Anomalies:</b> {'; '.join(incident.anomaly_reasons)}</li>")
+        if incident.runbook_actions:
+            brief_items.append(f"<li><b>Actions:</b> {'; '.join(incident.runbook_actions)}</li>")
+        if incident.dependency_hotspots:
+            brief_items.append(f"<li><b>Dependencies:</b> {'; '.join(incident.dependency_hotspots)}</li>")
+        incident_brief_html = ''.join(brief_items)
 
     anomaly_rows = "".join(rows) if rows else "<tr><td colspan='5'>No anomalies for selected asset.</td></tr>"
     runbook_rows_html = "".join(runbook_rows) if runbook_rows else "<tr><td colspan='4'>No runbook hints for selected asset.</td></tr>"
@@ -1087,6 +1101,11 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         <thead><tr><th>Asset</th><th>Source A</th><th>Source B</th><th>Shared signatures</th><th>Score</th><th>Example signature</th></tr></thead>
         <tbody>{dependency_overview_rows}</tbody>
       </table>
+
+      <h2 style='margin-top:14px'>Incident brief (explainable)</h2>
+      <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'>
+        <ul>{incident_brief_html}</ul>
+      </div>
 
       <h2>Selected asset anomalies</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
@@ -3032,6 +3051,24 @@ def get_ai_log_runbook_hints(
         raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     try:
         return service.build_log_runbook_hints(asset_id, limit=min(max(limit, 20), 2000))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/incident-brief", response_model=IncidentBrief)
+def get_ai_log_incident_brief(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    tenant_id: str | None = None,
+) -> IncidentBrief:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_incident_brief(asset_id, limit=min(max(limit, 20), 2000))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

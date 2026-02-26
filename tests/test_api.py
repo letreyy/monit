@@ -638,6 +638,7 @@ def test_ui_ai_analytics_center_page() -> None:
     resp = client.get("/ui/ai?asset_id=ui-ai-1")
     assert resp.status_code == 200
     assert "AI analytics center" in resp.text
+    assert "Incident brief (explainable)" in resp.text
     assert "Selected asset anomalies" in resp.text
     assert "Runbook hints (explainable)" in resp.text
     assert "Dependency map (event-source co-occurrence)" in resp.text
@@ -1956,6 +1957,29 @@ def test_ai_log_dependency_map_overview_endpoint() -> None:
     assert data["assets_considered"] >= 2
     assert data["total_edges"] >= 1
     assert "asset_id" in data["edges"][0]
+
+
+
+def test_ai_log_incident_brief_endpoint() -> None:
+    client.post("/assets", json={"id": "brief-asset", "name": "brief-asset", "asset_type": "server", "location": "R34"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "brief-asset", "source": "linux", "message": "panic in module abc", "severity": "critical"},
+                {"asset_id": "brief-asset", "source": "app", "message": "panic in module abc", "severity": "critical"},
+                {"asset_id": "brief-asset", "source": "app", "message": "timeout 503 downstream", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/assets/brief-asset/ai-log-analytics/incident-brief")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["asset_id"] == "brief-asset"
+    assert data["headline"]
+    assert data["confidence"] >= 0.0
+    assert isinstance(data["anomaly_reasons"], list)
 
 
 

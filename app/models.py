@@ -288,6 +288,15 @@ class DependencyMapOverview(BaseModel):
     edges: list[DependencyEdgeOverview] = Field(default_factory=list)
 
 
+class IncidentBrief(BaseModel):
+    asset_id: str
+    headline: str
+    confidence: float = Field(0.0, ge=0.0, le=1.0)
+    anomaly_reasons: list[str] = Field(default_factory=list)
+    runbook_actions: list[str] = Field(default_factory=list)
+    dependency_hotspots: list[str] = Field(default_factory=list)
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

@@ -9,6 +9,7 @@ from app.models import (
     DependencyEdge,
     DependencyMapOverview,
     DependencyEdgeOverview,
+    IncidentBrief,
     Alert,
     Asset,
     CollectorState,
@@ -699,6 +700,42 @@ class MonitoringService:
             assets_considered=len(assets),
             total_edges=len(rows),
             edges=rows,
+        )
+
+    def build_incident_brief(self, asset_id: str, limit: int = 300) -> IncidentBrief:
+        if not self.storage.asset_exists(asset_id):
+            raise KeyError(f"Unknown asset '{asset_id}'")
+
+        analytics = self.build_log_analytics(asset_id, limit=limit, max_clusters=10, max_anomalies=10)
+        runbook = self.build_log_runbook_hints(asset_id, limit=limit)
+        dep_map = self.build_dependency_map(asset_id, limit=limit, max_edges=5)
+
+        anomaly_reasons = [item.reason for item in analytics.anomalies[:3]]
+        runbook_actions = [item.action for item in runbook.hints[:3]]
+        dependency_hotspots = [f"{e.source_a} ↔ {e.source_b} ({e.shared_signatures})" for e in dep_map.edges[:3]]
+
+        confidence = 0.35
+        if analytics.anomalies:
+            confidence += min(0.35, analytics.anomalies[0].confidence * 0.4)
+        if dep_map.edges:
+            confidence += min(0.2, dep_map.edges[0].co_occurrence_score * 0.2)
+        if runbook.hints:
+            confidence += 0.1
+
+        if anomaly_reasons:
+            headline = anomaly_reasons[0]
+        elif dependency_hotspots:
+            headline = f"Dependency hotspot: {dependency_hotspots[0]}"
+        else:
+            headline = "No significant incident patterns in current window"
+
+        return IncidentBrief(
+            asset_id=asset_id,
+            headline=headline,
+            confidence=round(min(confidence, 0.99), 2),
+            anomaly_reasons=anomaly_reasons,
+            runbook_actions=runbook_actions,
+            dependency_hotspots=dependency_hotspots,
         )
 
     def build_recommendation(self, asset_id: str) -> Recommendation:
