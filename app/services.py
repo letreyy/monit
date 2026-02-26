@@ -5,6 +5,8 @@ from collections import Counter, defaultdict
 
 from app.models import (
     AccessAuditEntry,
+    DependencyMap,
+    DependencyEdge,
     Alert,
     Asset,
     CollectorState,
@@ -625,6 +627,42 @@ class MonitoringService:
             )
 
         return LogAnalyticsRunbookHints(asset_id=asset_id, hints=hints[:10])
+
+    def build_dependency_map(self, asset_id: str, limit: int = 300, max_edges: int = 20) -> DependencyMap:
+        if not self.storage.asset_exists(asset_id):
+            raise KeyError(f"Unknown asset '{asset_id}'")
+
+        events = list(reversed(self.list_events(asset_id, limit=limit)))
+        signatures_by_source: defaultdict[str, set[str]] = defaultdict(set)
+        for event in events:
+            signatures_by_source[event.source].add(self._message_signature(event.message))
+
+        sources = sorted(signatures_by_source.keys())
+        edges: list[DependencyEdge] = []
+        for i, src_a in enumerate(sources):
+            for src_b in sources[i + 1:]:
+                shared = signatures_by_source[src_a] & signatures_by_source[src_b]
+                if not shared:
+                    continue
+                score = len(shared) / max(1, min(len(signatures_by_source[src_a]), len(signatures_by_source[src_b])))
+                edges.append(
+                    DependencyEdge(
+                        source_a=src_a,
+                        source_b=src_b,
+                        shared_signatures=len(shared),
+                        co_occurrence_score=round(score, 3),
+                        example_signature=sorted(shared)[0],
+                    )
+                )
+
+        edges.sort(key=lambda item: (item.shared_signatures, item.co_occurrence_score), reverse=True)
+        limited_edges = edges[:max_edges]
+        return DependencyMap(
+            asset_id=asset_id,
+            total_sources=len(sources),
+            total_edges=len(limited_edges),
+            edges=limited_edges,
+        )
 
     def build_recommendation(self, asset_id: str) -> Recommendation:
         if not self.storage.asset_exists(asset_id):

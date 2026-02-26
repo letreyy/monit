@@ -34,6 +34,7 @@ from app.models import (
     IngestSummary,
     LogAnalyticsInsight,
     LogAnalyticsRunbookHints,
+    DependencyMap,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditDetails,
@@ -1002,6 +1003,7 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
 
     rows: list[str] = []
     runbook_rows: list[str] = []
+    dependency_rows: list[str] = []
     if selected_asset and any(asset.id == selected_asset for asset in tenant_assets):
         insight = service.build_log_analytics(
             selected_asset,
@@ -1019,9 +1021,15 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
             runbook_rows.append(
                 f"<tr><td>{hint.title}</td><td>{hint.confidence}</td><td>{hint.rationale}</td><td>{hint.action}</td></tr>"
             )
+        dependency_map = service.build_dependency_map(selected_asset, limit=min(max(limit_per_asset, 20), 2000), max_edges=10)
+        for edge in dependency_map.edges:
+            dependency_rows.append(
+                f"<tr><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
+            )
 
     anomaly_rows = "".join(rows) if rows else "<tr><td colspan='5'>No anomalies for selected asset.</td></tr>"
     runbook_rows_html = "".join(runbook_rows) if runbook_rows else "<tr><td colspan='4'>No runbook hints for selected asset.</td></tr>"
+    dependency_rows_html = "".join(dependency_rows) if dependency_rows else "<tr><td colspan='5'>No dependency edges for selected asset.</td></tr>"
     options = "".join(
         f"<option value='{asset.id}' {'selected' if asset.id == selected_asset else ''}>{asset.id} ({asset.name})</option>"
         for asset in tenant_assets
@@ -1072,6 +1080,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>Hint</th><th>Confidence</th><th>Rationale</th><th>Suggested action</th></tr></thead>
         <tbody>{runbook_rows_html}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Dependency map (event-source co-occurrence)</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Source A</th><th>Source B</th><th>Shared signatures</th><th>Score</th><th>Example signature</th></tr></thead>
+        <tbody>{dependency_rows_html}</tbody>
       </table>
     </body></html>
     """
@@ -2944,6 +2958,29 @@ def get_ai_log_analytics(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/assets/{asset_id}/ai-log-analytics/dependency-map", response_model=DependencyMap)
+def get_ai_log_dependency_map(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    max_edges: int = 20,
+    tenant_id: str | None = None,
+) -> DependencyMap:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_dependency_map(
+            asset_id,
+            limit=min(max(limit, 20), 2000),
+            max_edges=min(max(max_edges, 1), 100),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 
 @app.get("/assets/{asset_id}/ai-log-analytics/runbook-hints", response_model=LogAnalyticsRunbookHints)
 def get_ai_log_runbook_hints(

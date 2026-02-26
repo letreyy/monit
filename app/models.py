@@ -258,6 +258,21 @@ class LogAnalyticsRunbookHints(BaseModel):
     hints: list[RunbookHint] = Field(default_factory=list)
 
 
+class DependencyEdge(BaseModel):
+    source_a: str
+    source_b: str
+    shared_signatures: int = Field(..., ge=1)
+    co_occurrence_score: float = Field(0.0, ge=0.0)
+    example_signature: str = ""
+
+
+class DependencyMap(BaseModel):
+    asset_id: str
+    total_sources: int = Field(..., ge=0)
+    total_edges: int = Field(..., ge=0)
+    edges: list[DependencyEdge] = Field(default_factory=list)
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

@@ -640,6 +640,7 @@ def test_ui_ai_analytics_center_page() -> None:
     assert "AI analytics center" in resp.text
     assert "Selected asset anomalies" in resp.text
     assert "Runbook hints (explainable)" in resp.text
+    assert "Dependency map (event-source co-occurrence)" in resp.text
     assert "ui-ai-1" in resp.text
 
 def test_dashboard_data_endpoint_shape() -> None:
@@ -1907,6 +1908,30 @@ def test_ai_log_runbook_hints_endpoint() -> None:
     assert data["asset_id"] == "rb-asset"
     assert len(data["hints"]) >= 1
     assert "action" in data["hints"][0]
+
+
+def test_ai_log_dependency_map_endpoint() -> None:
+    client.post("/assets", json={"id": "dep-asset", "name": "dep-asset", "asset_type": "server", "location": "R31"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "dep-asset", "source": "linux", "message": "timeout code=501", "severity": "warning"},
+                {"asset_id": "dep-asset", "source": "app", "message": "timeout code=502", "severity": "warning"},
+                {"asset_id": "dep-asset", "source": "linux", "message": "db down hard", "severity": "critical"},
+                {"asset_id": "dep-asset", "source": "app", "message": "db down hard", "severity": "critical"},
+            ]
+        },
+    )
+
+    resp = client.get("/assets/dep-asset/ai-log-analytics/dependency-map")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["asset_id"] == "dep-asset"
+    assert data["total_sources"] >= 2
+    assert data["total_edges"] >= 1
+    assert data["edges"][0]["shared_signatures"] >= 1
+
 
 
 def test_ai_log_policy_merge_strategy_validation() -> None:
