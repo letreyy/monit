@@ -291,6 +291,44 @@ def test_winrm_real_pull_path_with_mock() -> None:
     assert any("RecordId=11" in e["message"] for e in events_resp.json())
 
 
+def test_winrm_pull_reports_unicode_credential_encoding_error() -> None:
+    class DummySession:
+        def __init__(self, endpoint, auth, transport, server_cert_validation):
+            pass
+
+        def run_ps(self, ps):
+            raise UnicodeEncodeError("latin-1", "тест", 0, 4, "ordinal not in range")
+
+    class DummyWinRM:
+        Session = DummySession
+
+    sys.modules["winrm"] = DummyWinRM
+    client.post(
+        "/assets",
+        json={"id": "win-cred", "name": "win-cred", "asset_type": "server", "location": "R10"},
+    )
+
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-cred",
+            name="cred",
+            address="10.0.0.12",
+            collector_type=main_module.CollectorType.winrm,
+            port=5985,
+            username="админ",
+            password="пароль",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="win-cred",
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_winrm_records(target, None)
+
+    assert "cannot be encoded" in str(exc.value)
+
+
 def test_collector_password_encryption_roundtrip() -> None:
     Fernet = pytest.importorskip("cryptography.fernet").Fernet
 

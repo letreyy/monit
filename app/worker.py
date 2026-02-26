@@ -535,7 +535,13 @@ $events | ConvertTo-Json -Depth 4 -Compress
             transport=transport,
             server_cert_validation="validate" if target.winrm_validate_tls else "ignore",
         )
-        result = session.run_ps(ps)
+        try:
+            result = session.run_ps(ps)
+        except UnicodeEncodeError as exc:
+            raise RuntimeError(
+                "WinRM credentials contain characters that cannot be encoded by the selected auth "
+                "transport. Use ASCII/Latin-1 credentials or switch transport (for example, NTLM/Kerberos)."
+            ) from exc
         if result.status_code != 0:
             err = (result.std_err or b"").decode("utf-8", errors="ignore")
             raise RuntimeError(f"WinRM command failed: {err.strip() or 'unknown error'}")
