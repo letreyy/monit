@@ -242,6 +242,7 @@ def test_winrm_pull_uses_target_options() -> None:
     assert rows[0]["LogName"] == "Security"
     assert "LogName=@('Security')" in DummyWinRM.last_ps
     assert "Select-Object -First 10" in DummyWinRM.last_ps
+    assert "[Console]::OutputEncoding" in DummyWinRM.last_ps
 
 def test_winrm_real_pull_path_with_mock() -> None:
     client.post(

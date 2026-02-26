@@ -519,6 +519,8 @@ class AgentlessWorker:
         batch_size = max(1, min(target.winrm_batch_size, 500))
 
         ps = f"""
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $last = {cursor}
 $events = Get-WinEvent -FilterHashtable @{{LogName=@({channels_ps})}} -ErrorAction SilentlyContinue |
     Where-Object {{ $_.RecordId -gt $last }} |
