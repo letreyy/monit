@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.models import AccessAuditEntry, Asset, CollectorState, CollectorTarget, Event, WorkerHistoryEntry
+from app.models import AccessAuditEntry, Asset, CollectorState, CollectorTarget, Event, LogAnalyticsPolicy, LogAnalyticsPolicyAuditEntry, WorkerHistoryEntry
 from app.security import SecretCodec, build_secret_codec
 
 
@@ -107,6 +107,31 @@ class SQLiteStorage:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS ai_log_policies (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    tenant_id TEXT,
+                    ignore_sources TEXT NOT NULL DEFAULT '',
+                    ignore_signatures TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_log_policy_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    policy_id TEXT NOT NULL,
+                    tenant_id TEXT,
+                    action TEXT NOT NULL,
+                    actor_role TEXT NOT NULL,
+                    details TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS access_audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts INTEGER NOT NULL,
@@ -133,12 +158,28 @@ class SQLiteStorage:
                 CREATE INDEX IF NOT EXISTS idx_access_audit_ts ON access_audit(ts)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_ai_log_policies_enabled ON ai_log_policies(enabled)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_ai_log_policy_audit_ts ON ai_log_policy_audit(ts)
+                """
+            )
             self._ensure_collector_target_columns(conn)
+            self._ensure_ai_log_policy_columns(conn)
 
     def _ensure_events_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
         if "fingerprint" not in columns:
             conn.execute("ALTER TABLE events ADD COLUMN fingerprint TEXT")
+
+    def _ensure_ai_log_policy_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(ai_log_policies)").fetchall()}
+        if "tenant_id" not in columns:
+            conn.execute("ALTER TABLE ai_log_policies ADD COLUMN tenant_id TEXT")
 
     def _ensure_collector_target_columns(self, conn: sqlite3.Connection) -> None:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(collector_targets)").fetchall()}
@@ -438,6 +479,191 @@ class SQLiteStorage:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM worker_history WHERE ts < ?", (min_ts_iso,))
             return int(cur.rowcount or 0)
+
+
+
+    def delete_ai_log_policy_audit_older_than(self, min_ts: int) -> int:
+        with self._connect() as conn:
+            cur = conn.execute("DELETE FROM ai_log_policy_audit WHERE ts < ?", (int(min_ts),))
+            return int(cur.rowcount or 0)
+
+    def upsert_ai_log_policy(self, policy: LogAnalyticsPolicy) -> LogAnalyticsPolicy:
+        ignore_sources = ",".join(policy.ignore_sources)
+        ignore_signatures = ",".join(policy.ignore_signatures)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_log_policies(id, name, tenant_id, ignore_sources, ignore_signatures, enabled)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name,
+                    tenant_id=excluded.tenant_id,
+                    ignore_sources=excluded.ignore_sources,
+                    ignore_signatures=excluded.ignore_signatures,
+                    enabled=excluded.enabled
+                """,
+                (policy.id, policy.name, policy.tenant_id, ignore_sources, ignore_signatures, 1 if policy.enabled else 0),
+            )
+        return policy
+
+    def list_ai_log_policies(self, enabled_only: bool = False, tenant_id: str | None = None) -> list[LogAnalyticsPolicy]:
+        query = "SELECT id, name, tenant_id, ignore_sources, ignore_signatures, enabled FROM ai_log_policies"
+        params: tuple[object, ...] = ()
+        where_parts: list[str] = []
+        if enabled_only:
+            where_parts.append("enabled = 1")
+        if tenant_id is not None:
+            where_parts.append("tenant_id = ?")
+            params = (tenant_id,)
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+        query += " ORDER BY id"
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        result: list[LogAnalyticsPolicy] = []
+        for row in rows:
+            ignore_sources = [item.strip().lower() for item in row["ignore_sources"].split(",") if item.strip()]
+            ignore_signatures = [item.strip().lower() for item in row["ignore_signatures"].split(",") if item.strip()]
+            result.append(
+                LogAnalyticsPolicy(
+                    id=row["id"],
+                    name=row["name"],
+                    tenant_id=row["tenant_id"],
+                    ignore_sources=ignore_sources,
+                    ignore_signatures=ignore_signatures,
+                    enabled=bool(row["enabled"]),
+                )
+            )
+        return result
+
+    def get_ai_log_policy(self, policy_id: str, tenant_id: str | None = None) -> LogAnalyticsPolicy | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, name, tenant_id, ignore_sources, ignore_signatures, enabled FROM ai_log_policies WHERE id = ?",
+                (policy_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        if tenant_id is not None and row["tenant_id"] != tenant_id:
+            return None
+        ignore_sources = [item.strip().lower() for item in row["ignore_sources"].split(",") if item.strip()]
+        ignore_signatures = [item.strip().lower() for item in row["ignore_signatures"].split(",") if item.strip()]
+        return LogAnalyticsPolicy(
+            id=row["id"],
+            name=row["name"],
+            tenant_id=row["tenant_id"],
+            ignore_sources=ignore_sources,
+            ignore_signatures=ignore_signatures,
+            enabled=bool(row["enabled"]),
+        )
+
+    def delete_ai_log_policy(self, policy_id: str, tenant_id: str | None = None) -> int:
+        with self._connect() as conn:
+            if tenant_id is None:
+                cur = conn.execute("DELETE FROM ai_log_policies WHERE id = ?", (policy_id,))
+            else:
+                cur = conn.execute("DELETE FROM ai_log_policies WHERE id = ? AND tenant_id = ?", (policy_id, tenant_id))
+            return int(cur.rowcount or 0)
+
+
+    def insert_ai_log_policy_audit(self, entry: LogAnalyticsPolicyAuditEntry) -> LogAnalyticsPolicyAuditEntry:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO ai_log_policy_audit(ts, policy_id, tenant_id, action, actor_role, details)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (entry.ts, entry.policy_id, entry.tenant_id, entry.action, entry.actor_role, entry.details),
+            )
+        return entry
+
+
+    def count_ai_log_policy_audit(
+        self,
+        tenant_id: str | None = None,
+        action: str | None = None,
+        policy_id: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        changed_field: str | None = None,
+    ) -> int:
+        query = "SELECT COUNT(1) AS c FROM ai_log_policy_audit"
+        where_parts: list[str] = []
+        params: list[object] = []
+
+        if tenant_id is not None:
+            where_parts.append("tenant_id = ?")
+            params.append(tenant_id)
+        if action is not None:
+            where_parts.append("action = ?")
+            params.append(action)
+        if policy_id is not None:
+            where_parts.append("policy_id = ?")
+            params.append(policy_id)
+        if min_ts is not None:
+            where_parts.append("ts >= ?")
+            params.append(int(min_ts))
+        if max_ts is not None:
+            where_parts.append("ts <= ?")
+            params.append(int(max_ts))
+        if changed_field is not None:
+            where_parts.append("details LIKE ?")
+            params.append(f"%\"{changed_field}\"%")
+
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+
+        with self._connect() as conn:
+            row = conn.execute(query, tuple(params)).fetchone()
+        return int(row["c"] if row else 0)
+
+    def list_ai_log_policy_audit(
+        self,
+        limit: int = 100,
+        tenant_id: str | None = None,
+        action: str | None = None,
+        policy_id: str | None = None,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+        sort: str = "desc",
+        offset: int = 0,
+        changed_field: str | None = None,
+    ) -> list[LogAnalyticsPolicyAuditEntry]:
+        query = "SELECT ts, policy_id, tenant_id, action, actor_role, details FROM ai_log_policy_audit"
+        where_parts: list[str] = []
+        params: list[object] = []
+
+        if tenant_id is not None:
+            where_parts.append("tenant_id = ?")
+            params.append(tenant_id)
+        if action is not None:
+            where_parts.append("action = ?")
+            params.append(action)
+        if policy_id is not None:
+            where_parts.append("policy_id = ?")
+            params.append(policy_id)
+        if min_ts is not None:
+            where_parts.append("ts >= ?")
+            params.append(int(min_ts))
+        if max_ts is not None:
+            where_parts.append("ts <= ?")
+            params.append(int(max_ts))
+        if changed_field is not None:
+            where_parts.append("details LIKE ?")
+            params.append(f"%\"{changed_field}\"%")
+
+        if where_parts:
+            query += " WHERE " + " AND ".join(where_parts)
+        direction = "ASC" if str(sort).lower() == "asc" else "DESC"
+        query += f" ORDER BY id {direction} LIMIT ? OFFSET ?"
+        params.append(max(1, min(limit, 1000)))
+        params.append(max(0, offset))
+
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [LogAnalyticsPolicyAuditEntry(**dict(row)) for row in rows]
 
     @staticmethod
     def _fingerprint(event: Event) -> str:
