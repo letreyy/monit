@@ -134,6 +134,62 @@ def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
     assert "data-collector-scope='snmp' style='display:none" in page.text
     assert "toggleCollectorFields()" in page.text
 
+def test_ui_assets_and_collectors_support_edit_prefill() -> None:
+    client.post(
+        "/ui/assets",
+        data={"asset_id": "edit-asset-1", "name": "edit name", "asset_type": "server", "location": "R9"},
+    )
+    client.post(
+        "/ui/collectors",
+        data={
+            "target_id": "edit-col-1",
+            "name": "edit collector",
+            "collector_type": "ssh",
+            "address": "10.0.0.9",
+            "port": "22",
+            "username": "root",
+            "password": "secret-pass",
+            "asset_id": "edit-asset-1",
+            "poll_interval_sec": "60",
+            "enabled": "on",
+        },
+    )
+
+    assets_page = client.get("/ui/assets?edit_id=edit-asset-1")
+    assert assets_page.status_code == 200
+    assert "value='edit-asset-1' readonly" in assets_page.text
+    assert "Update asset" in assets_page.text
+    assert "Cancel edit" in assets_page.text
+
+    collectors_page = client.get("/ui/collectors?edit_id=edit-col-1")
+    assert collectors_page.status_code == 200
+    assert "value='edit-col-1' readonly" in collectors_page.text
+    assert "Update collector target" in collectors_page.text
+    assert "name='password'" in collectors_page.text
+
+    # Ensure password can be kept when editing without resubmitting it
+    update_resp = client.post(
+        "/ui/collectors",
+        data={
+            "target_id": "edit-col-1",
+            "name": "edit collector updated",
+            "collector_type": "ssh",
+            "address": "10.0.0.10",
+            "port": "2222",
+            "username": "root",
+            "password": "",
+            "asset_id": "edit-asset-1",
+            "poll_interval_sec": "60",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert update_resp.status_code == 303
+
+    col = client.get("/collectors").json()[0]
+    assert col["id"] == "edit-col-1"
+    assert col["address"] == "10.0.0.10"
+
 def test_worker_run_once_and_state() -> None:
     client.post(
         "/assets",

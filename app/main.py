@@ -743,10 +743,22 @@ def ui_compliance_purge(
 
 
 @app.get("/ui/collectors", response_class=HTMLResponse)
-def ui_collectors() -> str:
+def ui_collectors(edit_id: str = "") -> str:
     asset_options = "".join(f"<option value='{a.id}'>{a.id} ({a.name})</option>" for a in service.list_assets())
     if not asset_options:
         asset_options = "<option value=''>No assets. Create one first.</option>"
+
+    edit_target = next((item for item in service.list_collector_targets() if item.id == edit_id.strip()), None)
+    is_edit = edit_target is not None
+    form_target_id = edit_target.id if edit_target else ""
+    form_name = edit_target.name if edit_target else ""
+    form_type = edit_target.collector_type.value if edit_target else "winrm"
+    form_address = edit_target.address if edit_target else ""
+    form_port = edit_target.port if edit_target else 5985
+    form_username = edit_target.username if edit_target else ""
+    form_asset_id = edit_target.asset_id if edit_target else ""
+    form_poll_interval = edit_target.poll_interval_sec if edit_target else 60
+    form_enabled = edit_target.enabled if edit_target else True
 
     rows = []
     for c in service.list_collector_targets():
@@ -754,7 +766,7 @@ def ui_collectors() -> str:
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
             f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
-            f"<td><form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0'><button type='submit'>Delete</button></form></td></tr>"
+            f"<td><a href='/ui/collectors?edit_id={c.id}'>Edit</a> | <form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0;display:inline'><button type='submit'>Delete</button></form></td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='9'>No collector targets yet</td></tr>"
 
@@ -763,17 +775,17 @@ def ui_collectors() -> str:
       <h1>Agentless Collector Targets</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
       <form method='post' action='/ui/collectors' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='target_id' required /></label><br/><br/>
-        <label>Name <input name='name' required /></label><br/><br/>
+        <label>ID <input name='target_id' value='{form_target_id}' {'readonly' if is_edit else ''} required /></label><br/><br/>
+        <label>Name <input name='name' value='{form_name}' required /></label><br/><br/>
         <label>Type
           <select name='collector_type' id='collector-type-select' onchange='toggleCollectorFields()'>
-            <option value='winrm'>winrm (Windows)</option>
-            <option value='ssh'>ssh (Linux/Unix)</option>
-            <option value='snmp'>snmp (Network/Storage)</option>
+            <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
+            <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
+            <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
           </select>
         </label><br/><br/>
-        <label>Address/IP <input name='address' required /></label><br/><br/>
-        <label>Port <input name='port' type='number' value='5985' required /></label><br/><br/>
+        <label>Address/IP <input name='address' value='{form_address}' required /></label><br/><br/>
+        <label>Port <input name='port' type='number' value='{form_port}' required /></label><br/><br/>
         <label>Username <input name='username' required /></label><br/><br/>
         <label>Password <input name='password' type='password' required /></label><br/><br/>
 
@@ -811,11 +823,11 @@ def ui_collectors() -> str:
           <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
         </div>
         <label>Asset
-          <select name='asset_id' required>{asset_options}</select>
+          <select name='asset_id' required>{''.join(f"<option value='{a.id}' {'selected' if a.id == form_asset_id else ''}>{a.id} ({a.name})</option>" for a in service.list_assets()) or "<option value=''>No assets. Create one first.</option>"}</select>
         </label><br/><br/>
-        <label>Poll interval (sec) <input name='poll_interval_sec' type='number' value='60' required /></label><br/><br/>
-        <label>Enabled <input name='enabled' type='checkbox' checked /></label><br/><br/>
-        <button type='submit'>Save collector target</button>
+        <label>Poll interval (sec) <input name='poll_interval_sec' type='number' value='{form_poll_interval}' required /></label><br/><br/>
+        <label>Enabled <input name='enabled' type='checkbox' {'checked' if form_enabled else ''} /></label><br/><br/>
+        <button type='submit'>{'Update collector target' if is_edit else 'Save collector target'}</button> {"<a href='/ui/collectors' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
       </form>
       <h2>Configured targets</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
@@ -845,7 +857,7 @@ def ui_collectors_submit(
     address: str = Form(...),
     port: int = Form(...),
     username: str = Form(...),
-    password: str = Form(...),
+    password: str = Form(""),
     asset_id: str = Form(...),
     poll_interval_sec: int = Form(60),
     winrm_transport: str = Form("ntlm"),
@@ -861,6 +873,11 @@ def ui_collectors_submit(
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
+    existing_target = next((item for item in service.list_collector_targets() if item.id == target_id.strip()), None)
+    resolved_password = password if password else (existing_target.password if existing_target else "")
+    if not resolved_password:
+        raise HTTPException(status_code=422, detail="password is required for new collector")
+
     target = CollectorTarget(
         id=target_id.strip(),
         name=name.strip(),
@@ -868,7 +885,7 @@ def ui_collectors_submit(
         address=address.strip(),
         port=port,
         username=username.strip(),
-        password=password,
+        password=resolved_password,
         asset_id=asset_id.strip(),
         poll_interval_sec=poll_interval_sec,
         enabled=enabled is not None,
@@ -895,13 +912,17 @@ def ui_collectors_delete(target_id: str) -> RedirectResponse:
 
 
 @app.get("/ui/assets", response_class=HTMLResponse)
-def ui_assets() -> str:
+def ui_assets(edit_id: str = "") -> str:
+    assets = service.list_assets()
+    edit_asset = next((item for item in assets if item.id == edit_id.strip()), None)
+    is_edit = edit_asset is not None
+
     rows = []
-    for asset in service.list_assets():
+    for asset in assets:
         rows.append(
             f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td>"
             f"<td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td><form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0'>"
+            f"<td><a href='/ui/assets?edit_id={asset.id}'>Edit</a> | <form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0;display:inline'>"
             f"<button type='submit'>Delete</button></form></td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
@@ -911,18 +932,18 @@ def ui_assets() -> str:
       <h1>Assets</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/ai'>AI analytics</a></p>
       <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='asset_id' required /></label><br/><br/>
-        <label>Name <input name='name' required /></label><br/><br/>
+        <label>ID <input name='asset_id' value='{edit_asset.id if edit_asset else ''}' {'readonly' if is_edit else ''} required /></label><br/><br/>
+        <label>Name <input name='name' value='{edit_asset.name if edit_asset else ''}' required /></label><br/><br/>
         <label>Type
           <select name='asset_type'>
-            <option value='server'>server</option>
-            <option value='storage_shelf'>storage_shelf</option>
-            <option value='network'>network</option>
-            <option value='bmc'>bmc</option>
+            <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
+            <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
+            <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
+            <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
           </select>
         </label><br/><br/>
-        <label>Location <input name='location' /></label><br/><br/>
-        <button type='submit'>Save asset</button>
+        <label>Location <input name='location' value='{edit_asset.location or '' if edit_asset else ''}'/></label><br/><br/>
+        <button type='submit'>{'Update asset' if is_edit else 'Save asset'}</button> {"<a href='/ui/assets' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
       </form>
       <h2>Registered assets</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
