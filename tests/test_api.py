@@ -719,6 +719,8 @@ def test_ui_ai_analytics_center_page() -> None:
     assert resp.status_code == 200
     assert "AI analytics center" in resp.text
     assert "Top incident briefs (cross-asset)" in resp.text
+    assert "/ai-log-analytics/incident-brief/overview?" in resp.text
+    assert "/ai-log-analytics/incident-brief/overview.csv?" in resp.text
     assert "Incident brief (explainable)" in resp.text
     assert "Selected asset anomalies" in resp.text
     assert "Runbook hints (explainable)" in resp.text
@@ -2084,6 +2086,10 @@ def test_ai_log_incident_brief_overview_endpoint() -> None:
     assert data["assets_considered"] >= 2
     assert len(data["briefs"]) >= 1
     assert "headline" in data["briefs"][0]
+
+    csv_resp = client.get("/ai-log-analytics/incident-brief/overview.csv", params={"min_confidence": 0.1})
+    assert csv_resp.status_code == 200
+    assert "asset_id,confidence,headline" in csv_resp.text
 
 
 

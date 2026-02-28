@@ -1068,6 +1068,16 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         min_confidence=0.45,
         asset_ids={asset.id for asset in tenant_assets},
     )
+    incident_overview_query = '&'.join(
+        item
+        for item in [
+            f"tenant_id={tenant_scope}" if tenant_scope else "",
+            f"limit_per_asset={min(max(limit_per_asset, 20), 2000)}",
+            f"max_assets={min(max(max_assets, 1), 200)}",
+            "min_confidence=0.45",
+        ]
+        if item
+    )
 
     top_assets_rows = "".join(
         f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.anomalies_total}</td><td>{item.top_severity.value if item.top_severity else '-'}</td><td>{item.top_reason or '-'}</td></tr>"
@@ -1103,6 +1113,7 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
       </div>
 
       <h2>Top incident briefs (cross-asset)</h2>
+      <p><a href='/ai-log-analytics/incident-brief/overview?{incident_overview_query}'>Open JSON</a> | <a href='/ai-log-analytics/incident-brief/overview.csv?{incident_overview_query}'>Export CSV</a></p>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
         <thead><tr><th>Asset</th><th>Confidence</th><th>Headline</th></tr></thead>
         <tbody>{incident_overview_rows}</tbody>
@@ -3089,6 +3100,30 @@ def get_ai_log_incident_brief_overview(
         min_confidence=min(max(min_confidence, 0.0), 1.0),
         asset_ids=tenant_assets,
     )
+
+
+@app.get("/ai-log-analytics/incident-brief/overview.csv", response_class=PlainTextResponse)
+def get_ai_log_incident_brief_overview_csv(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 25,
+    min_confidence: float = 0.0,
+    tenant_id: str | None = None,
+) -> str:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    overview = service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=min(max(min_confidence, 0.0), 1.0),
+        asset_ids=tenant_assets,
+    )
+    header = "asset_id,confidence,headline,anomaly_reasons,runbook_actions,dependency_hotspots\n"
+    rows = ''.join(
+        f'"{item.asset_id}","{item.confidence}","{item.headline}","{"; ".join(item.anomaly_reasons)}","{"; ".join(item.runbook_actions)}","{"; ".join(item.dependency_hotspots)}"\n'
+        for item in overview.briefs
+    )
+    return header + rows
 
 
 @app.get("/assets/{asset_id}/ai-log-analytics/incident-brief", response_model=IncidentBrief)
