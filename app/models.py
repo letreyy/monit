@@ -297,6 +297,11 @@ class IncidentBrief(BaseModel):
     dependency_hotspots: list[str] = Field(default_factory=list)
 
 
+class IncidentBriefOverview(BaseModel):
+    assets_considered: int = Field(..., ge=0)
+    briefs: list[IncidentBrief] = Field(default_factory=list)
+
+
 class WorkerHistoryEntry(BaseModel):
     ts: str
     target_id: str

@@ -37,6 +37,7 @@ from app.models import (
     DependencyMap,
     DependencyMapOverview,
     IncidentBrief,
+    IncidentBriefOverview,
     LogAnalyticsOverview,
     LogAnalyticsPolicy,
     LogAnalyticsPolicyAuditDetails,
@@ -1061,6 +1062,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         max_edges=10,
         asset_ids={asset.id for asset in tenant_assets},
     )
+    incident_overview = service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=0.45,
+        asset_ids={asset.id for asset in tenant_assets},
+    )
 
     top_assets_rows = "".join(
         f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.anomalies_total}</td><td>{item.top_severity.value if item.top_severity else '-'}</td><td>{item.top_reason or '-'}</td></tr>"
@@ -1071,6 +1078,11 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         f"<tr><td><a href='/ui/ai?asset_id={edge.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{edge.asset_id}</a></td><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
         for edge in dependency_overview.edges
     ) or "<tr><td colspan='6'>No cross-asset dependencies found.</td></tr>"
+
+    incident_overview_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.confidence}</td><td>{item.headline}</td></tr>"
+        for item in incident_overview.briefs[:10]
+    ) or "<tr><td colspan='3'>No incident briefs matched current filters.</td></tr>"
 
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
@@ -1089,6 +1101,12 @@ def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: in
         <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Assets with anomalies</b><div style='font-size:30px'>{overview.assets_with_anomalies}</div></div>
         <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Total anomalies</b><div style='font-size:30px'>{overview.total_anomalies}</div></div>
       </div>
+
+      <h2>Top incident briefs (cross-asset)</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Confidence</th><th>Headline</th></tr></thead>
+        <tbody>{incident_overview_rows}</tbody>
+      </table>
 
       <h2>Top assets by anomalies</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
@@ -3053,6 +3071,24 @@ def get_ai_log_runbook_hints(
         return service.build_log_runbook_hints(asset_id, limit=min(max(limit, 20), 2000))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/ai-log-analytics/incident-brief/overview", response_model=IncidentBriefOverview)
+def get_ai_log_incident_brief_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 25,
+    min_confidence: float = 0.0,
+    tenant_id: str | None = None,
+) -> IncidentBriefOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    return service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=min(max(min_confidence, 0.0), 1.0),
+        asset_ids=tenant_assets,
+    )
 
 
 @app.get("/assets/{asset_id}/ai-log-analytics/incident-brief", response_model=IncidentBrief)

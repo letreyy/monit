@@ -10,6 +10,7 @@ from app.models import (
     DependencyMapOverview,
     DependencyEdgeOverview,
     IncidentBrief,
+    IncidentBriefOverview,
     Alert,
     Asset,
     CollectorState,
@@ -737,6 +738,27 @@ class MonitoringService:
             runbook_actions=runbook_actions,
             dependency_hotspots=dependency_hotspots,
         )
+
+    def build_incident_brief_overview(
+        self,
+        limit_per_asset: int = 300,
+        max_assets: int = 25,
+        min_confidence: float = 0.0,
+        asset_ids: set[str] | None = None,
+    ) -> IncidentBriefOverview:
+        assets = self.list_assets()
+        if asset_ids is not None:
+            assets = [asset for asset in assets if asset.id in asset_ids]
+        assets = assets[:max_assets]
+
+        briefs: list[IncidentBrief] = []
+        for asset in assets:
+            brief = self.build_incident_brief(asset.id, limit=limit_per_asset)
+            if brief.confidence >= min_confidence:
+                briefs.append(brief)
+
+        briefs.sort(key=lambda item: item.confidence, reverse=True)
+        return IncidentBriefOverview(assets_considered=len(assets), briefs=briefs)
 
     def build_recommendation(self, asset_id: str) -> Recommendation:
         if not self.storage.asset_exists(asset_id):

@@ -718,6 +718,7 @@ def test_ui_ai_analytics_center_page() -> None:
     resp = client.get("/ui/ai?asset_id=ui-ai-1")
     assert resp.status_code == 200
     assert "AI analytics center" in resp.text
+    assert "Top incident briefs (cross-asset)" in resp.text
     assert "Incident brief (explainable)" in resp.text
     assert "Selected asset anomalies" in resp.text
     assert "Runbook hints (explainable)" in resp.text
@@ -2060,6 +2061,29 @@ def test_ai_log_incident_brief_endpoint() -> None:
     assert data["headline"]
     assert data["confidence"] >= 0.0
     assert isinstance(data["anomaly_reasons"], list)
+
+
+
+def test_ai_log_incident_brief_overview_endpoint() -> None:
+    client.post("/assets", json={"id": "brief-over-a", "name": "brief-over-a", "asset_type": "server", "location": "R35"})
+    client.post("/assets", json={"id": "brief-over-b", "name": "brief-over-b", "asset_type": "server", "location": "R36"})
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {"asset_id": "brief-over-a", "source": "linux", "message": "kernel panic happened", "severity": "critical"},
+                {"asset_id": "brief-over-a", "source": "app", "message": "kernel panic happened", "severity": "critical"},
+                {"asset_id": "brief-over-b", "source": "db", "message": "replication stuck", "severity": "warning"},
+            ]
+        },
+    )
+
+    resp = client.get("/ai-log-analytics/incident-brief/overview", params={"min_confidence": 0.1})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assets_considered"] >= 2
+    assert len(data["briefs"]) >= 1
+    assert "headline" in data["briefs"][0]
 
 
 
