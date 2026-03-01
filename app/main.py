@@ -32,6 +32,19 @@ from app.models import (
     Event,
     EventBatch,
     IngestSummary,
+    LogAnalyticsInsight,
+    LogAnalyticsRunbookHints,
+    DependencyMap,
+    DependencyMapOverview,
+    IncidentBrief,
+    IncidentBriefOverview,
+    LogAnalyticsOverview,
+    LogAnalyticsPolicy,
+    LogAnalyticsPolicyAuditDetails,
+    LogAnalyticsPolicyAuditEntry,
+    LogAnalyticsPolicyAuditEntryParsed,
+    LogAnalyticsPolicyDryRun,
+    PolicyMergeStrategy,
     Overview,
     Recommendation,
     Severity,
@@ -677,6 +690,7 @@ def ui_compliance(request: Request, limit: int = 30) -> str:
           <h3 style='margin-top:0'>Retention purge</h3>
           <label>Audit max age sec <input type='number' name='audit_max_age_sec' value='2592000' min='0' /></label><br/><br/>
           <label>Worker history max age sec <input type='number' name='worker_history_max_age_sec' value='2592000' min='0' /></label><br/><br/>
+          <label>AI policy audit max age sec <input type='number' name='ai_policy_audit_max_age_sec' value='2592000' min='0' /></label><br/><br/>
           <label><input type='checkbox' name='drop_jwt_reject_telemetry'/> Drop JWT reject telemetry</label><br/><br/>
           <button type='submit'>Run purge</button>
         </form>
@@ -709,6 +723,7 @@ def ui_compliance_purge(
     request: Request,
     audit_max_age_sec: int = Form(30 * 24 * 3600),
     worker_history_max_age_sec: int = Form(30 * 24 * 3600),
+    ai_policy_audit_max_age_sec: int = Form(30 * 24 * 3600),
     drop_jwt_reject_telemetry: str | None = Form(None),
 ) -> RedirectResponse:
     context = getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer"))
@@ -719,6 +734,7 @@ def ui_compliance_purge(
     worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
     service.delete_access_audit_older_than(audit_min_ts)
     service.delete_worker_history_older_than(worker_min_ts_iso)
+    service.delete_ai_log_policy_audit_older_than(now - max(0, ai_policy_audit_max_age_sec))
     if drop_jwt_reject_telemetry is not None:
         JWT_REJECT_TELEMETRY.clear()
         JWT_REJECT_BY_ISSUER_CLIENT.clear()
@@ -727,10 +743,22 @@ def ui_compliance_purge(
 
 
 @app.get("/ui/collectors", response_class=HTMLResponse)
-def ui_collectors() -> str:
+def ui_collectors(edit_id: str = "") -> str:
     asset_options = "".join(f"<option value='{a.id}'>{a.id} ({a.name})</option>" for a in service.list_assets())
     if not asset_options:
         asset_options = "<option value=''>No assets. Create one first.</option>"
+
+    edit_target = next((item for item in service.list_collector_targets() if item.id == edit_id.strip()), None)
+    is_edit = edit_target is not None
+    form_target_id = edit_target.id if edit_target else ""
+    form_name = edit_target.name if edit_target else ""
+    form_type = edit_target.collector_type.value if edit_target else "winrm"
+    form_address = edit_target.address if edit_target else ""
+    form_port = edit_target.port if edit_target else 5985
+    form_username = edit_target.username if edit_target else ""
+    form_asset_id = edit_target.asset_id if edit_target else ""
+    form_poll_interval = edit_target.poll_interval_sec if edit_target else 60
+    form_enabled = edit_target.enabled if edit_target else True
 
     rows = []
     for c in service.list_collector_targets():
@@ -738,7 +766,7 @@ def ui_collectors() -> str:
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
             f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
-            f"<td><form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0'><button type='submit'>Delete</button></form></td></tr>"
+            f"<td><a href='/ui/collectors?edit_id={c.id}'>Edit</a> | <form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0;display:inline'><button type='submit'>Delete</button></form></td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='9'>No collector targets yet</td></tr>"
 
@@ -747,47 +775,59 @@ def ui_collectors() -> str:
       <h1>Agentless Collector Targets</h1>
       <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Manage assets</a></p>
       <form method='post' action='/ui/collectors' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='target_id' required /></label><br/><br/>
-        <label>Name <input name='name' required /></label><br/><br/>
+        <label>ID <input name='target_id' value='{form_target_id}' {'readonly' if is_edit else ''} required /></label><br/><br/>
+        <label>Name <input name='name' value='{form_name}' required /></label><br/><br/>
         <label>Type
-          <select name='collector_type'>
-            <option value='winrm'>winrm (Windows)</option>
-            <option value='ssh'>ssh (Linux/Unix)</option>
-            <option value='snmp'>snmp (Network/Storage)</option>
+          <select name='collector_type' id='collector-type-select' onchange='toggleCollectorFields()'>
+            <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
+            <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
+            <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
           </select>
         </label><br/><br/>
-        <label>Address/IP <input name='address' required /></label><br/><br/>
-        <label>Port <input name='port' type='number' value='5985' required /></label><br/><br/>
+        <label>Address/IP <input name='address' value='{form_address}' required /></label><br/><br/>
+        <label>Port <input name='port' type='number' value='{form_port}' required /></label><br/><br/>
         <label>Username <input name='username' required /></label><br/><br/>
         <label>Password <input name='password' type='password' required /></label><br/><br/>
-        <label>WinRM transport
-          <select name='winrm_transport'>
-            <option value='ntlm'>ntlm</option>
-            <option value='basic'>basic</option>
-            <option value='kerberos'>kerberos</option>
-          </select>
-        </label><br/><br/>
-        <label>WinRM logs (comma separated) <input name='winrm_event_logs' value='System,Application' /></label><br/><br/>
-        <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
-        <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
-        <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label><br/><br/>
-        <label>SSH metrics command <input name='ssh_metrics_command' value='cat /proc/loadavg' /></label><br/><br/>
-        <label>SSH log path <input name='ssh_log_path' value='/var/log/syslog' /></label><br/><br/>
-        <label>SSH tail lines <input name='ssh_tail_lines' type='number' value='50' min='1' max='500' /></label><br/><br/>
-        <label>SNMP community <input name='snmp_community' value='public' /></label><br/><br/>
-        <label>SNMP version
-          <select name='snmp_version'>
-            <option value='2c'>2c</option>
-            <option value='3'>3</option>
-          </select>
-        </label><br/><br/>
-        <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label><br/><br/>
+
+        <div data-collector-scope='winrm' style='padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>WinRM settings</b><br/><br/>
+          <label>WinRM transport
+            <select name='winrm_transport'>
+              <option value='ntlm'>ntlm</option>
+              <option value='basic'>basic</option>
+              <option value='kerberos'>kerberos</option>
+            </select>
+          </label><br/><br/>
+          <label>WinRM logs (comma separated) <input name='winrm_event_logs' value='System,Application' /></label><br/><br/>
+          <label>WinRM batch size <input name='winrm_batch_size' type='number' value='50' min='1' max='500' /></label><br/><br/>
+          <label>WinRM use HTTPS <input name='winrm_use_https' type='checkbox' /></label><br/><br/>
+          <label>WinRM validate TLS cert <input name='winrm_validate_tls' type='checkbox' /></label>
+        </div>
+
+        <div data-collector-scope='ssh' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>SSH settings</b><br/><br/>
+          <label>SSH metrics command <input name='ssh_metrics_command' value='cat /proc/loadavg' /></label><br/><br/>
+          <label>SSH log path <input name='ssh_log_path' value='/var/log/syslog' /></label><br/><br/>
+          <label>SSH tail lines <input name='ssh_tail_lines' type='number' value='50' min='1' max='500' /></label>
+        </div>
+
+        <div data-collector-scope='snmp' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>SNMP settings</b><br/><br/>
+          <label>SNMP community <input name='snmp_community' value='public' /></label><br/><br/>
+          <label>SNMP version
+            <select name='snmp_version'>
+              <option value='2c'>2c</option>
+              <option value='3'>3</option>
+            </select>
+          </label><br/><br/>
+          <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
+        </div>
         <label>Asset
-          <select name='asset_id' required>{asset_options}</select>
+          <select name='asset_id' required>{''.join(f"<option value='{a.id}' {'selected' if a.id == form_asset_id else ''}>{a.id} ({a.name})</option>" for a in service.list_assets()) or "<option value=''>No assets. Create one first.</option>"}</select>
         </label><br/><br/>
-        <label>Poll interval (sec) <input name='poll_interval_sec' type='number' value='60' required /></label><br/><br/>
-        <label>Enabled <input name='enabled' type='checkbox' checked /></label><br/><br/>
-        <button type='submit'>Save collector target</button>
+        <label>Poll interval (sec) <input name='poll_interval_sec' type='number' value='{form_poll_interval}' required /></label><br/><br/>
+        <label>Enabled <input name='enabled' type='checkbox' {'checked' if form_enabled else ''} /></label><br/><br/>
+        <button type='submit'>{'Update collector target' if is_edit else 'Save collector target'}</button> {"<a href='/ui/collectors' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
       </form>
       <h2>Configured targets</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
@@ -795,6 +835,16 @@ def ui_collectors() -> str:
         <tbody>{rows_html}</tbody>
       </table>
       <p><i>Next step: scheduler/worker will auto-poll enabled targets using these settings.</i></p>
+      <script>
+        function toggleCollectorFields() {{
+          const select = document.getElementById('collector-type-select');
+          const type = select ? select.value : 'winrm';
+          document.querySelectorAll('[data-collector-scope]').forEach((el) => {{
+            el.style.display = el.getAttribute('data-collector-scope') === type ? 'block' : 'none';
+          }});
+        }}
+        toggleCollectorFields();
+      </script>
     </body></html>
     """
 
@@ -807,7 +857,7 @@ def ui_collectors_submit(
     address: str = Form(...),
     port: int = Form(...),
     username: str = Form(...),
-    password: str = Form(...),
+    password: str = Form(""),
     asset_id: str = Form(...),
     poll_interval_sec: int = Form(60),
     winrm_transport: str = Form("ntlm"),
@@ -823,6 +873,11 @@ def ui_collectors_submit(
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
+    existing_target = next((item for item in service.list_collector_targets() if item.id == target_id.strip()), None)
+    resolved_password = password if password else (existing_target.password if existing_target else "")
+    if not resolved_password:
+        raise HTTPException(status_code=422, detail="password is required for new collector")
+
     target = CollectorTarget(
         id=target_id.strip(),
         name=name.strip(),
@@ -830,7 +885,7 @@ def ui_collectors_submit(
         address=address.strip(),
         port=port,
         username=username.strip(),
-        password=password,
+        password=resolved_password,
         asset_id=asset_id.strip(),
         poll_interval_sec=poll_interval_sec,
         enabled=enabled is not None,
@@ -857,13 +912,17 @@ def ui_collectors_delete(target_id: str) -> RedirectResponse:
 
 
 @app.get("/ui/assets", response_class=HTMLResponse)
-def ui_assets() -> str:
+def ui_assets(edit_id: str = "") -> str:
+    assets = service.list_assets()
+    edit_asset = next((item for item in assets if item.id == edit_id.strip()), None)
+    is_edit = edit_asset is not None
+
     rows = []
-    for asset in service.list_assets():
+    for asset in assets:
         rows.append(
             f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td>"
             f"<td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td><form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0'>"
+            f"<td><a href='/ui/assets?edit_id={asset.id}'>Edit</a> | <form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0;display:inline'>"
             f"<button type='submit'>Delete</button></form></td></tr>"
         )
     rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
@@ -871,20 +930,20 @@ def ui_assets() -> str:
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Assets</h1>
-      <p><a href='/dashboard'>← Dashboard</a></p>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/ai'>AI analytics</a></p>
       <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='asset_id' required /></label><br/><br/>
-        <label>Name <input name='name' required /></label><br/><br/>
+        <label>ID <input name='asset_id' value='{edit_asset.id if edit_asset else ''}' {'readonly' if is_edit else ''} required /></label><br/><br/>
+        <label>Name <input name='name' value='{edit_asset.name if edit_asset else ''}' required /></label><br/><br/>
         <label>Type
           <select name='asset_type'>
-            <option value='server'>server</option>
-            <option value='storage_shelf'>storage_shelf</option>
-            <option value='network'>network</option>
-            <option value='bmc'>bmc</option>
+            <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
+            <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
+            <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
+            <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
           </select>
         </label><br/><br/>
-        <label>Location <input name='location' /></label><br/><br/>
-        <button type='submit'>Save asset</button>
+        <label>Location <input name='location' value='{edit_asset.location or '' if edit_asset else ''}'/></label><br/><br/>
+        <button type='submit'>{'Update asset' if is_edit else 'Save asset'}</button> {"<a href='/ui/assets' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
       </form>
       <h2>Registered assets</h2>
       <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
@@ -941,7 +1000,7 @@ def ui_asset_detail(asset_id: str) -> str:
     return f"""
     <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
       <h1>Asset detail: {asset.id}</h1>
-      <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a></p>
+      <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ui/ai?asset_id={asset.id}'>AI analytics</a></p>
       <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
       <h2>Recommendation</h2>
       <p><b>Risk score:</b> {rec.risk_score} — {rec.summary}</p>
@@ -956,6 +1015,574 @@ def ui_asset_detail(asset_id: str) -> str:
     </body></html>
     """
 
+
+
+
+@app.get("/ui/ai", response_class=HTMLResponse)
+def ui_ai_analytics(asset_id: str = "", tenant_id: str = "", limit_per_asset: int = 200, max_assets: int = 25) -> str:
+    tenant_scope = tenant_id.strip() or None
+    requested_asset_id = asset_id.strip()
+    tenant_assets = [asset for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)]
+    selected_asset = requested_asset_id or (tenant_assets[0].id if tenant_assets else "")
+
+    rows: list[str] = []
+    runbook_rows: list[str] = []
+    dependency_rows: list[str] = []
+    incident_brief_html = "<li>No incident brief for selected asset.</li>"
+    if selected_asset and any(asset.id == selected_asset for asset in tenant_assets):
+        insight = service.build_log_analytics(
+            selected_asset,
+            limit=min(max(limit_per_asset, 20), 2000),
+            max_clusters=10,
+            max_anomalies=10,
+        )
+        for anomaly in insight.anomalies:
+            evidence = anomaly.evidence[0] if anomaly.evidence else "-"
+            rows.append(
+                f"<tr><td>{anomaly.kind}</td><td>{anomaly.severity.value}</td><td>{anomaly.confidence}</td><td>{anomaly.reason}</td><td>{evidence}</td></tr>"
+            )
+        runbook_hints = service.build_log_runbook_hints(selected_asset, limit=min(max(limit_per_asset, 20), 2000))
+        for hint in runbook_hints.hints:
+            runbook_rows.append(
+                f"<tr><td>{hint.title}</td><td>{hint.confidence}</td><td>{hint.rationale}</td><td>{hint.action}</td></tr>"
+            )
+        dependency_map = service.build_dependency_map(selected_asset, limit=min(max(limit_per_asset, 20), 2000), max_edges=10)
+        for edge in dependency_map.edges:
+            dependency_rows.append(
+                f"<tr><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
+            )
+        incident = service.build_incident_brief(selected_asset, limit=min(max(limit_per_asset, 20), 2000))
+        brief_items = [
+            f"<li><b>Headline:</b> {incident.headline}</li>",
+            f"<li><b>Confidence:</b> {incident.confidence}</li>",
+        ]
+        if incident.anomaly_reasons:
+            brief_items.append(f"<li><b>Anomalies:</b> {'; '.join(incident.anomaly_reasons)}</li>")
+        if incident.runbook_actions:
+            brief_items.append(f"<li><b>Actions:</b> {'; '.join(incident.runbook_actions)}</li>")
+        if incident.dependency_hotspots:
+            brief_items.append(f"<li><b>Dependencies:</b> {'; '.join(incident.dependency_hotspots)}</li>")
+        incident_brief_html = ''.join(brief_items)
+
+    anomaly_rows = "".join(rows) if rows else "<tr><td colspan='5'>No anomalies for selected asset.</td></tr>"
+    runbook_rows_html = "".join(runbook_rows) if runbook_rows else "<tr><td colspan='4'>No runbook hints for selected asset.</td></tr>"
+    dependency_rows_html = "".join(dependency_rows) if dependency_rows else "<tr><td colspan='5'>No dependency edges for selected asset.</td></tr>"
+    options = "".join(
+        f"<option value='{asset.id}' {'selected' if asset.id == selected_asset else ''}>{asset.id} ({asset.name})</option>"
+        for asset in tenant_assets
+    ) or "<option value=''>No assets in scope</option>"
+
+    overview = service.build_log_analytics_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        asset_ids={asset.id for asset in tenant_assets},
+    )
+    dependency_overview = service.build_dependency_map_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_edges=10,
+        asset_ids={asset.id for asset in tenant_assets},
+    )
+    incident_overview = service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=0.45,
+        asset_ids={asset.id for asset in tenant_assets},
+    )
+    incident_overview_query = '&'.join(
+        item
+        for item in [
+            f"tenant_id={tenant_scope}" if tenant_scope else "",
+            f"limit_per_asset={min(max(limit_per_asset, 20), 2000)}",
+            f"max_assets={min(max(max_assets, 1), 200)}",
+            "min_confidence=0.45",
+        ]
+        if item
+    )
+
+    top_assets_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.anomalies_total}</td><td>{item.top_severity.value if item.top_severity else '-'}</td><td>{item.top_reason or '-'}</td></tr>"
+        for item in overview.assets[:10]
+    ) or "<tr><td colspan='4'>No analyzed assets.</td></tr>"
+
+    dependency_overview_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={edge.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{edge.asset_id}</a></td><td>{edge.source_a}</td><td>{edge.source_b}</td><td>{edge.shared_signatures}</td><td>{edge.co_occurrence_score}</td><td>{edge.example_signature}</td></tr>"
+        for edge in dependency_overview.edges
+    ) or "<tr><td colspan='6'>No cross-asset dependencies found.</td></tr>"
+
+    incident_overview_rows = "".join(
+        f"<tr><td><a href='/ui/ai?asset_id={item.asset_id}{'&tenant_id=' + tenant_scope if tenant_scope else ''}'>{item.asset_id}</a></td><td>{item.confidence}</td><td>{item.headline}</td></tr>"
+        for item in incident_overview.briefs[:10]
+    ) or "<tr><td colspan='3'>No incident briefs matched current filters.</td></tr>"
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>AI analytics center</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Assets</a> | <a href='/ui/ai/policies'>AI Policy Center</a> | <a href='/ai-log-analytics/overview'>JSON API overview</a></p>
+      <form method='get' action='/ui/ai' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:14px'>
+        <label>Asset
+          <select name='asset_id'>{options}</select>
+        </label>
+        <label style='margin-left:10px'>Tenant id <input name='tenant_id' value='{tenant_scope or ''}' placeholder='optional'/></label>
+        <button type='submit'>Load analytics</button>
+      </form>
+
+      <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px'>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Assets considered</b><div style='font-size:30px'>{overview.assets_considered}</div></div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Assets with anomalies</b><div style='font-size:30px'>{overview.assets_with_anomalies}</div></div>
+        <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'><b>Total anomalies</b><div style='font-size:30px'>{overview.total_anomalies}</div></div>
+      </div>
+
+      <h2>Top incident briefs (cross-asset)</h2>
+      <p><a href='/ai-log-analytics/incident-brief/overview?{incident_overview_query}'>Open JSON</a> | <a href='/ai-log-analytics/incident-brief/overview.csv?{incident_overview_query}'>Export CSV</a></p>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Confidence</th><th>Headline</th></tr></thead>
+        <tbody>{incident_overview_rows}</tbody>
+      </table>
+
+      <h2>Top assets by anomalies</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Anomalies</th><th>Top severity</th><th>Top reason</th></tr></thead>
+        <tbody>{top_assets_rows}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Cross-asset dependency hotspots</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Asset</th><th>Source A</th><th>Source B</th><th>Shared signatures</th><th>Score</th><th>Example signature</th></tr></thead>
+        <tbody>{dependency_overview_rows}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Incident brief (explainable)</h2>
+      <div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px'>
+        <ul>{incident_brief_html}</ul>
+      </div>
+
+      <h2>Selected asset anomalies</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Kind</th><th>Severity</th><th>Confidence</th><th>Reason</th><th>Evidence</th></tr></thead>
+        <tbody>{anomaly_rows}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Runbook hints (explainable)</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Hint</th><th>Confidence</th><th>Rationale</th><th>Suggested action</th></tr></thead>
+        <tbody>{runbook_rows_html}</tbody>
+      </table>
+
+      <h2 style='margin-top:14px'>Dependency map (event-source co-occurrence)</h2>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>Source A</th><th>Source B</th><th>Shared signatures</th><th>Score</th><th>Example signature</th></tr></thead>
+        <tbody>{dependency_rows_html}</tbody>
+      </table>
+    </body></html>
+    """
+
+
+
+def _policy_snapshot_dict(policy: LogAnalyticsPolicy | None) -> dict[str, object] | None:
+    if policy is None:
+        return None
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "tenant_id": policy.tenant_id,
+        "enabled": policy.enabled,
+        "ignore_sources": sorted(policy.ignore_sources),
+        "ignore_signatures": sorted(policy.ignore_signatures),
+    }
+
+
+def _build_policy_audit_details(action: str, before: LogAnalyticsPolicy | None, after: LogAnalyticsPolicy | None = None) -> str:
+    before_snapshot = _policy_snapshot_dict(before)
+    after_snapshot = _policy_snapshot_dict(after)
+    changed_fields: list[str] = []
+    if action == "delete":
+        changed_fields = ["deleted"]
+    elif before_snapshot is None and after_snapshot is not None:
+        changed_fields = ["created", "name", "tenant_id", "enabled", "ignore_sources", "ignore_signatures"]
+    elif before_snapshot is not None and after_snapshot is not None:
+        for key in ("name", "tenant_id", "enabled", "ignore_sources", "ignore_signatures"):
+            if before_snapshot.get(key) != after_snapshot.get(key):
+                changed_fields.append(key)
+
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "action": action,
+        "changed_fields": changed_fields,
+        "before": before_snapshot,
+    }
+    if after_snapshot is not None:
+        payload["after"] = after_snapshot
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _parse_policy_audit_details(details: str) -> LogAnalyticsPolicyAuditDetails | None:
+    try:
+        payload = json.loads(details)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    try:
+        return LogAnalyticsPolicyAuditDetails(**payload)
+    except Exception:
+        return None
+
+
+def _render_audit_nav_link(label: str, href: str, enabled: bool, disabled_hint: str, margin_left: str = "10px") -> str:
+    if enabled:
+        return f"<a href='{href}' style='margin-left:{margin_left}'>{label}</a>"
+    return f"<span style='margin-left:{margin_left};color:#94a3b8' title='{disabled_hint}'>{label}</span>"
+
+
+@app.get("/ui/ai/policies", response_class=HTMLResponse)
+def ui_ai_policy_center(
+    tenant_id: str = "",
+    policy_id: str = "",
+    edit_policy_id: str = "",
+    asset_id: str = "",
+    merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    audit_action: str = "",
+    audit_policy_id: str = "",
+    audit_min_ts: str = "",
+    audit_max_ts: str = "",
+    audit_sort: str = "desc",
+    audit_offset: int = 0,
+    audit_limit: int = 20,
+    audit_page: int = 1,
+    audit_changed_field: str = "",
+    impact_mode: str = "weighted",
+) -> str:
+    tenant_scope = tenant_id.strip() or None
+    selected_policy_id = policy_id.strip()
+    selected_asset_id = asset_id.strip()
+
+    policies = service.list_ai_log_policies(tenant_id=tenant_scope)
+    edit_policy = next((item for item in policies if item.id == edit_policy_id.strip()), None)
+    is_policy_edit = edit_policy is not None
+    policy_form_id = edit_policy.id if edit_policy else ""
+    policy_form_name = edit_policy.name if edit_policy else ""
+    policy_form_tenant = (edit_policy.tenant_id if edit_policy else tenant_scope) or ""
+    policy_form_sources = ",".join(sorted(edit_policy.ignore_sources)) if edit_policy else ""
+    policy_form_signatures = ",".join(sorted(edit_policy.ignore_signatures)) if edit_policy else ""
+    policy_form_enabled = edit_policy.enabled if edit_policy else True
+
+    policy_rows = "".join(
+        f"<tr><td>{item.id}</td><td>{item.name}</td><td>{item.tenant_id or '-'}</td><td>{'on' if item.enabled else 'off'}</td><td>{len(item.ignore_sources)}</td><td>{len(item.ignore_signatures)}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&edit_policy_id={item.id}'>Edit</a> | <form method='post' action='/ui/ai/policies/{item.id}/delete' style='margin:0;display:inline'><input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/><button type='submit'>Delete</button></form></td></tr>"
+        for item in policies
+    ) or "<tr><td colspan='7'>No policies yet.</td></tr>"
+
+    audit_action_norm = audit_action.strip() or None
+    audit_policy_id_norm = audit_policy_id.strip() or None
+    audit_min_ts_norm = int(audit_min_ts.strip()) if audit_min_ts.strip().isdigit() else None
+    audit_max_ts_norm = int(audit_max_ts.strip()) if audit_max_ts.strip().isdigit() else None
+    audit_sort_norm = audit_sort.strip().lower()
+    audit_changed_field_norm = audit_changed_field.strip() or None
+    if audit_sort_norm not in {"asc", "desc"}:
+        audit_sort_norm = "desc"
+
+    limit_norm = min(max(audit_limit, 1), 200)
+    page_norm = max(1, audit_page)
+    offset_norm = max(0, audit_offset)
+    if page_norm > 1:
+        offset_norm = (page_norm - 1) * limit_norm
+
+    audit_rows = service.list_ai_log_policy_audit(
+        limit=limit_norm,
+        tenant_id=tenant_scope,
+        action=audit_action_norm,
+        policy_id=audit_policy_id_norm,
+        min_ts=audit_min_ts_norm,
+        max_ts=audit_max_ts_norm,
+        sort=audit_sort_norm,
+        offset=offset_norm,
+        changed_field=audit_changed_field_norm,
+    )
+    total_audit_rows = service.count_ai_log_policy_audit(
+        tenant_id=tenant_scope,
+        action=audit_action_norm,
+        policy_id=audit_policy_id_norm,
+        min_ts=audit_min_ts_norm,
+        max_ts=audit_max_ts_norm,
+        changed_field=audit_changed_field_norm,
+    )
+    audit_html = "".join(
+        f"<tr><td>{row.ts}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&audit_policy_id={row.policy_id}'>{row.policy_id}</a></td><td>{row.action}</td><td>{row.actor_role}</td><td>{row.details}</td></tr>"
+        for row in audit_rows
+    ) or "<tr><td colspan='5'>No audit rows.</td></tr>"
+
+    audit_csv_params = [
+        f"tenant_id={tenant_scope}" if tenant_scope else "",
+        f"action={audit_action_norm}" if audit_action_norm else "",
+        f"policy_id={audit_policy_id_norm}" if audit_policy_id_norm else "",
+        f"min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
+        f"max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
+        f"sort={audit_sort_norm}",
+        f"offset={offset_norm}",
+        f"limit={limit_norm}",
+    ]
+    audit_csv_query = "&".join(item for item in audit_csv_params if item)
+
+    impact_mode_norm = impact_mode.strip().lower() or "weighted"
+    if impact_mode_norm not in {"weighted", "critical_warning", "critical_only"}:
+        impact_mode_norm = "weighted"
+
+    ui_filter_params = [
+        f"tenant_id={tenant_scope}" if tenant_scope else "",
+        f"policy_id={selected_policy_id}" if selected_policy_id else "",
+        f"asset_id={selected_asset_id}" if selected_asset_id else "",
+        f"merge_strategy={merge_strategy.value if isinstance(merge_strategy, PolicyMergeStrategy) else str(merge_strategy)}",
+        f"impact_mode={impact_mode_norm}",
+        f"audit_action={audit_action_norm}" if audit_action_norm else "",
+        f"audit_policy_id={audit_policy_id_norm}" if audit_policy_id_norm else "",
+        f"audit_min_ts={audit_min_ts_norm}" if audit_min_ts_norm is not None else "",
+        f"audit_max_ts={audit_max_ts_norm}" if audit_max_ts_norm is not None else "",
+        f"audit_sort={audit_sort_norm}",
+        f"audit_changed_field={audit_changed_field_norm}" if audit_changed_field_norm else "",
+        f"changed_field={audit_changed_field_norm}" if audit_changed_field_norm else "",
+        f"audit_limit={limit_norm}",
+    ]
+    ui_filter_query_base = "&".join(item for item in ui_filter_params if item)
+    prev_offset = max(0, offset_norm - limit_norm)
+    next_offset = offset_norm + limit_norm
+    current_page = (offset_norm // limit_norm) + 1
+    page_start = max(1, current_page - 2)
+    page_end = page_start + 4
+    page_links = []
+    for page in range(page_start, page_end + 1):
+        page_offset = (page - 1) * limit_norm
+        if page == current_page:
+            page_links.append(f"<span style='color:#0f172a;font-weight:700'>{page}</span>")
+        else:
+            page_links.append(f"<a href='/ui/ai/policies?{ui_filter_query_base}&audit_offset={page_offset}'>{page}</a>")
+    page_links_html = " | ".join(page_links)
+    last_page = max(1, (total_audit_rows + limit_norm - 1) // limit_norm)
+    last_offset = max(0, (last_page - 1) * limit_norm)
+
+    first_link = _render_audit_nav_link(
+        label='⏮ First',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset=0',
+        enabled=current_page > 1,
+        disabled_hint='Already at first page',
+    )
+    prev_link = _render_audit_nav_link(
+        label='◀ Prev',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={prev_offset}',
+        enabled=current_page > 1,
+        disabled_hint='Already at first page',
+    )
+    next_link = _render_audit_nav_link(
+        label='Next ▶',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={next_offset}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
+    )
+    jump_link = _render_audit_nav_link(
+        label='Jump +5 pages',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_page={max(current_page + 5, 1)}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
+    )
+    last_link = _render_audit_nav_link(
+        label='⏭ Last',
+        href=f'/ui/ai/policies?{ui_filter_query_base}&audit_offset={last_offset}',
+        enabled=current_page < last_page,
+        disabled_hint='Already at last page',
+    )
+
+    api_url = f"/ai-log-analytics/policies/audit?{audit_csv_query}"
+
+    dry_run_html = ""
+    if selected_policy_id and selected_asset_id:
+        try:
+            dry_run = service.preview_ai_log_policy_effect(
+                asset_id=selected_asset_id,
+                policy_id=selected_policy_id,
+                merge_strategy=merge_strategy,
+                tenant_id=tenant_scope,
+                impact_mode=impact_mode_norm,
+            )
+            impact_rows = "".join(
+                f"<tr><td>{item.cluster_id}</td><td>{item.source}</td><td>{item.events_filtered}</td><td>{item.severity_mix}</td><td>{item.impact_score}</td><td>{item.signature}</td></tr>"
+                for item in dry_run.top_impacted_clusters
+            ) or "<tr><td colspan='6'>No impacted clusters.</td></tr>"
+            dry_run_html = (
+                f"<div style='background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:12px;margin:10px 0'>"
+                f"<b>Dry-run result:</b> total={dry_run.total_events}, filtered={dry_run.filtered_events} ({int(dry_run.filtered_share*100)}%), remaining={dry_run.remaining_events} ({int(dry_run.remaining_share*100)}%)"
+                f"<br/><span style='font-size:12px;color:#64748b'>mode={dry_run.impact_mode} | sources={', '.join(dry_run.applied_sources) or '-'} | signatures={len(dry_run.applied_signatures)}</span>"
+                f"<div style='margin-top:10px'><b>Top impacted clusters</b></div>"
+                f"<table border='0' cellpadding='6' cellspacing='0' style='width:100%;margin-top:6px;background:#fff;border:1px solid #e2e8f0'>"
+                f"<thead><tr><th>Cluster</th><th>Source</th><th>Filtered events</th><th>Severity mix</th><th>Impact score</th><th>Signature</th></tr></thead><tbody>{impact_rows}</tbody></table>"
+                f"</div>"
+            )
+        except KeyError as exc:
+            dry_run_html = f"<div style='color:#b91c1c;margin:10px 0'>Dry-run failed: {exc}</div>"
+
+    asset_options = "".join(
+        f"<option value='{asset.id}' {'selected' if asset.id == selected_asset_id else ''}>{asset.id}</option>"
+        for asset in service.list_assets()
+        if _asset_in_tenant(asset.id, tenant_scope)
+    ) or "<option value=''>No assets in scope</option>"
+    policy_options = "".join(
+        f"<option value='{item.id}' {'selected' if item.id == selected_policy_id else ''}>{item.id} ({item.name})</option>"
+        for item in policies
+    ) or "<option value=''>No policies</option>"
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>AI policy center</h1>
+      <p><a href='/ui/ai'>← AI analytics</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ai-log-analytics/policies'>JSON policies API</a></p>
+
+      <form method='post' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+        <h3>Create/update policy</h3>
+        <label>ID <input name='policy_id' value='{policy_form_id}' {'readonly' if is_policy_edit else ''} required/></label>
+        <label style='margin-left:10px'>Name <input name='name' value='{policy_form_name}' required/></label>
+        <label style='margin-left:10px'>Tenant <input name='tenant_id' value='{policy_form_tenant}' placeholder='optional'/></label><br/><br/>
+        <label>Ignore sources (csv) <input name='ignore_sources' value='{policy_form_sources}' style='min-width:420px'/></label><br/><br/>
+        <label>Ignore signatures (csv) <input name='ignore_signatures' value='{policy_form_signatures}' style='min-width:420px'/></label><br/><br/>
+        <label><input type='checkbox' name='enabled' {'checked' if policy_form_enabled else ''}/> enabled</label><br/><br/>
+        <button type='submit'>{'Update policy' if is_policy_edit else 'Save policy'}</button> {"<a href='/ui/ai/policies" + (f'?tenant_id={tenant_scope}' if tenant_scope else '') + "' style='margin-left:10px'>Cancel edit</a>" if is_policy_edit else ''}
+      </form>
+
+      <h3 style='margin-top:16px'>Policies</h3>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>ID</th><th>Name</th><th>Tenant</th><th>Enabled</th><th>Ignore sources</th><th>Ignore signatures</th><th>Actions</th></tr></thead>
+        <tbody>{policy_rows}</tbody>
+      </table>
+
+      <h3 style='margin-top:16px'>Policy dry-run</h3>
+      <form method='get' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
+        <input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/>
+        <label>Policy <select name='policy_id'>{policy_options}</select></label>
+        <label style='margin-left:10px'>Asset <select name='asset_id'>{asset_options}</select></label>
+        <label style='margin-left:10px'>Merge
+          <select name='merge_strategy'>
+            <option value='union' {'selected' if merge_strategy == PolicyMergeStrategy.union else ''}>union</option>
+            <option value='intersection' {'selected' if merge_strategy == PolicyMergeStrategy.intersection else ''}>intersection</option>
+          </select>
+        </label>
+        <label style='margin-left:10px'>Impact mode
+          <select name='impact_mode'>
+            <option value='weighted' {'selected' if impact_mode_norm == 'weighted' else ''}>weighted</option>
+            <option value='critical_warning' {'selected' if impact_mode_norm == 'critical_warning' else ''}>critical_warning</option>
+            <option value='critical_only' {'selected' if impact_mode_norm == 'critical_only' else ''}>critical_only</option>
+          </select>
+        </label>
+        <button type='submit'>Run dry-run</button>
+      </form>
+      {dry_run_html}
+
+      <h3>Recent policy audit</h3>
+      <form method='get' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:10px'>
+        <input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/>
+        <label>Action <input name='audit_action' value='{audit_action_norm or ''}' placeholder='upsert/delete'/></label>
+        <label style='margin-left:10px'>Policy <input name='audit_policy_id' value='{audit_policy_id_norm or ''}'/></label>
+        <label style='margin-left:10px'>Min ts <input name='audit_min_ts' value='{audit_min_ts_norm or ''}'/></label>
+        <label style='margin-left:10px'>Max ts <input name='audit_max_ts' value='{audit_max_ts_norm or ''}'/></label>
+        <label style='margin-left:10px'>Changed field <input name='audit_changed_field' value='{audit_changed_field_norm or ''}' placeholder='enabled|ignore_sources|deleted'/></label>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=enabled' style='margin-left:8px;font-size:12px'>preset: enabled</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=ignore_sources' style='margin-left:6px;font-size:12px'>preset: ignore_sources</a>
+        <a href='/ui/ai/policies?{ui_filter_query_base}&audit_changed_field=deleted' style='margin-left:6px;font-size:12px'>preset: deleted</a>
+        <label style='margin-left:10px'>Sort
+          <select name='audit_sort'>
+            <option value='desc' {'selected' if audit_sort_norm == 'desc' else ''}>desc</option>
+            <option value='asc' {'selected' if audit_sort_norm == 'asc' else ''}>asc</option>
+          </select>
+        </label>
+        <label style='margin-left:10px'>Offset <input name='audit_offset' type='number' min='0' value='{offset_norm}'/></label>
+        <label style='margin-left:10px'>Page <input name='audit_page' type='number' min='1' value='{current_page}'/></label>
+        <label style='margin-left:10px'>Limit <input name='audit_limit' type='number' min='1' max='200' value='{limit_norm}'/></label>
+        <button type='submit'>Apply audit filters</button>
+        <a href='/ai-log-analytics/policies/audit?{audit_csv_query}' style='margin-left:10px'>Open JSON</a>
+        <a href='/ai-log-analytics/policies/audit.csv?{audit_csv_query}' style='margin-left:10px'>Export CSV</a>
+        {first_link}
+        {prev_link}
+        {next_link}
+        {jump_link}
+        {last_link}
+      </form>
+      <div style='margin:6px 0 12px;font-size:13px;color:#334155'>Pages: {page_links_html} &nbsp;|&nbsp; total rows: {total_audit_rows}</div>
+      <div style='margin:0 0 10px'>
+        <label style='font-size:12px;color:#64748b'>API URL for current filters</label><br/>
+        <input id='api-url-current' readonly value='{api_url}' style='width:100%;max-width:980px'/>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl(document.getElementById('api-url-current').value)">Copy API URL</button>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl('/ai-log-analytics/policies/audit?{audit_csv_query}')">Copy JSON URL</button>
+        <button type='button' style='margin-left:6px' onclick="copyPolicyAuditUrl('/ai-log-analytics/policies/audit.csv?{audit_csv_query}')">Copy CSV URL</button>
+        <span id='copy-status' style='margin-left:8px;font-size:12px;color:#16a34a'></span>
+      </div>
+      <script>
+        function copyPolicyAuditUrl(value) {{
+          navigator.clipboard.writeText(value);
+          const status = document.getElementById('copy-status');
+          if (status) {{
+            status.textContent = 'copied';
+            setTimeout(() => {{ status.textContent = ''; }}, 1200);
+          }}
+        }}
+      </script>
+      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+        <thead><tr><th>TS</th><th>Policy</th><th>Action</th><th>Actor role</th><th>Details</th></tr></thead>
+        <tbody>{audit_html}</tbody>
+      </table>
+    </body></html>
+    """
+
+
+@app.post("/ui/ai/policies")
+def ui_ai_policy_center_upsert(
+    policy_id: str = Form(...),
+    name: str = Form(...),
+    tenant_id: str = Form(""),
+    ignore_sources: str = Form(""),
+    ignore_signatures: str = Form(""),
+    enabled: str | None = Form(None),
+) -> RedirectResponse:
+    tenant_scope = tenant_id.strip() or None
+    policy = LogAnalyticsPolicy(
+        id=policy_id.strip(),
+        name=name.strip(),
+        tenant_id=tenant_scope,
+        ignore_sources=[item.strip().lower() for item in ignore_sources.split(",") if item.strip()],
+        ignore_signatures=[item.strip().lower() for item in ignore_signatures.split(",") if item.strip()],
+        enabled=enabled is not None,
+    )
+    before = service.storage.get_ai_log_policy(policy.id, tenant_id=tenant_scope)
+    stored = service.upsert_ai_log_policy(policy)
+    service.add_ai_log_policy_audit(
+        LogAnalyticsPolicyAuditEntry(
+            ts=int(time.time()),
+            policy_id=stored.id,
+            tenant_id=stored.tenant_id,
+            action="upsert",
+            actor_role="ui",
+            details=_build_policy_audit_details("upsert", before=before, after=stored),
+        )
+    )
+    tenant_q = f"?tenant_id={tenant_scope}" if tenant_scope else ""
+    return RedirectResponse(url=f"/ui/ai/policies{tenant_q}", status_code=303)
+
+
+@app.post("/ui/ai/policies/{policy_id}/delete")
+def ui_ai_policy_center_delete(policy_id: str, tenant_id: str = Form("")) -> RedirectResponse:
+    tenant_scope = tenant_id.strip() or None
+    try:
+        before = service.storage.get_ai_log_policy(policy_id.strip(), tenant_id=tenant_scope)
+        service.delete_ai_log_policy(policy_id.strip(), tenant_id=tenant_scope)
+        service.add_ai_log_policy_audit(
+            LogAnalyticsPolicyAuditEntry(
+                ts=int(time.time()),
+                policy_id=policy_id.strip(),
+                tenant_id=tenant_scope,
+                action="delete",
+                actor_role="ui",
+                details=_build_policy_audit_details("delete", before=before),
+            )
+        )
+    except KeyError:
+        pass
+
+    tenant_q = f"?tenant_id={tenant_scope}" if tenant_scope else ""
+    return RedirectResponse(url=f"/ui/ai/policies{tenant_q}", status_code=303)
 
 @app.get("/ui/events", response_class=HTMLResponse)
 def ui_events() -> str:
@@ -1401,6 +2028,7 @@ def auth_compliance_purge(
     request: Request,
     audit_max_age_sec: int = 30 * 24 * 3600,
     worker_history_max_age_sec: int = 30 * 24 * 3600,
+    ai_policy_audit_max_age_sec: int = 30 * 24 * 3600,
     drop_jwt_reject_telemetry: bool = False,
     _role: str = Depends(_require_admin_dependency),
 ) -> dict[str, int | bool]:
@@ -1409,6 +2037,7 @@ def auth_compliance_purge(
     worker_min_ts_iso = datetime.utcfromtimestamp(now - max(0, worker_history_max_age_sec)).isoformat()
     deleted_audit = service.delete_access_audit_older_than(audit_min_ts)
     deleted_worker_history = service.delete_worker_history_older_than(worker_min_ts_iso)
+    deleted_ai_policy_audit = service.delete_ai_log_policy_audit_older_than(now - max(0, ai_policy_audit_max_age_sec))
     if drop_jwt_reject_telemetry:
         JWT_REJECT_TELEMETRY.clear()
         JWT_REJECT_BY_ISSUER_CLIENT.clear()
@@ -1416,6 +2045,7 @@ def auth_compliance_purge(
     return {
         "deleted_audit": deleted_audit,
         "deleted_worker_history": deleted_worker_history,
+        "deleted_ai_policy_audit": deleted_ai_policy_audit,
         "jwt_reject_telemetry_cleared": drop_jwt_reject_telemetry,
     }
 
@@ -1967,7 +2597,7 @@ def dashboard(
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/ai'>AI Analytics</a><a href='/ui/ai/policies'>AI Policies</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
         </div>
       </div>
       <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>
@@ -2141,6 +2771,408 @@ def list_insights(request: Request, asset_id: str, tenant_id: str | None = None)
     if not _asset_in_tenant(asset_id, tenant_scope):
         raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
     return service.build_correlation_insights(asset_id)
+
+
+
+
+@app.get("/ai-log-analytics/policies", response_model=list[LogAnalyticsPolicy])
+def list_ai_log_policies(request: Request, enabled_only: bool = False, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> list[LogAnalyticsPolicy]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    return service.list_ai_log_policies(enabled_only=enabled_only, tenant_id=tenant_scope)
+
+
+@app.post("/ai-log-analytics/policies", response_model=LogAnalyticsPolicy)
+def upsert_ai_log_policy(request: Request, policy: LogAnalyticsPolicy, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> LogAnalyticsPolicy:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if tenant_scope and policy.tenant_id and policy.tenant_id != tenant_scope:
+        raise HTTPException(status_code=403, detail="Policy tenant is out of scope")
+    if tenant_scope and not policy.tenant_id:
+        policy = policy.model_copy(update={"tenant_id": tenant_scope})
+    before = service.storage.get_ai_log_policy(policy.id, tenant_id=tenant_scope)
+    stored = service.upsert_ai_log_policy(policy)
+    service.add_ai_log_policy_audit(
+        LogAnalyticsPolicyAuditEntry(
+            ts=int(time.time()),
+            policy_id=stored.id,
+            tenant_id=stored.tenant_id,
+            action="upsert",
+            actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
+            details=_build_policy_audit_details("upsert", before=before, after=stored),
+        )
+    )
+    return stored
+
+
+@app.delete("/ai-log-analytics/policies/{policy_id}")
+def delete_ai_log_policy(request: Request, policy_id: str, tenant_id: str | None = None, _role: str = Depends(_require_operator_dependency)) -> dict[str, str]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    try:
+        before = service.storage.get_ai_log_policy(policy_id, tenant_id=tenant_scope)
+        service.delete_ai_log_policy(policy_id, tenant_id=tenant_scope)
+        service.add_ai_log_policy_audit(
+            LogAnalyticsPolicyAuditEntry(
+                ts=int(time.time()),
+                policy_id=policy_id,
+                tenant_id=tenant_scope,
+                action="delete",
+                actor_role=getattr(request.state, "auth_context", _resolve_auth_context_from_request(request, None, default_role="viewer")).role,
+                details=_build_policy_audit_details("delete", before=before),
+            )
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"deleted": policy_id}
+
+
+@app.get("/ai-log-analytics/policies/audit", response_model=list[LogAnalyticsPolicyAuditEntry])
+def list_ai_log_policy_audit(
+    request: Request,
+    limit: int = 100,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    changed_field: str | None = None,
+    _role: str = Depends(_require_admin_dependency),
+) -> list[LogAnalyticsPolicyAuditEntry]:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    sort_norm = str(sort).strip().lower()
+    if sort_norm not in {"asc", "desc"}:
+        raise HTTPException(status_code=422, detail="sort must be 'asc' or 'desc'")
+    return service.list_ai_log_policy_audit(
+        limit=limit,
+        tenant_id=tenant_scope,
+        action=action.strip() if action else None,
+        policy_id=policy_id.strip() if policy_id else None,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort_norm,
+        offset=max(0, offset),
+        changed_field=changed_field.strip() if changed_field else None,
+    )
+
+
+@app.get("/ai-log-analytics/policies/audit/parsed", response_model=list[LogAnalyticsPolicyAuditEntryParsed])
+def list_ai_log_policy_audit_parsed(
+    request: Request,
+    limit: int = 100,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    changed_field: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    _role: str = Depends(_require_admin_dependency),
+) -> list[LogAnalyticsPolicyAuditEntryParsed]:
+    rows = list_ai_log_policy_audit(
+        request=request,
+        limit=limit,
+        tenant_id=tenant_id,
+        action=action,
+        policy_id=policy_id,
+        changed_field=changed_field,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort,
+        offset=offset,
+        _role=_role,
+    )
+    return [
+        LogAnalyticsPolicyAuditEntryParsed(
+            **row.model_dump(),
+            details_json=_parse_policy_audit_details(row.details),
+        )
+        for row in rows
+    ]
+
+
+@app.get("/ai-log-analytics/policies/audit.csv", response_class=PlainTextResponse)
+def ai_log_policy_audit_csv(
+    request: Request,
+    limit: int = 1000,
+    tenant_id: str | None = None,
+    action: str | None = None,
+    policy_id: str | None = None,
+    min_ts: int | None = None,
+    max_ts: int | None = None,
+    sort: str = "desc",
+    offset: int = 0,
+    changed_field: str | None = None,
+    _role: str = Depends(_require_admin_dependency),
+) -> str:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    sort_norm = sort.strip().lower()
+    if sort_norm not in {"asc", "desc"}:
+        raise HTTPException(status_code=422, detail="sort must be 'asc' or 'desc'")
+    rows = service.list_ai_log_policy_audit(
+        limit=limit,
+        tenant_id=tenant_scope,
+        action=action.strip() if action else None,
+        policy_id=policy_id.strip() if policy_id else None,
+        min_ts=min_ts,
+        max_ts=max_ts,
+        sort=sort_norm,
+        offset=max(0, offset),
+        changed_field=changed_field.strip() if changed_field else None,
+    )
+    header = 'ts,policy_id,tenant_id,action,actor_role,details\n'
+    body = ''.join(
+        f'"{row.ts}","{row.policy_id}","{row.tenant_id or ""}","{row.action}","{row.actor_role}","{row.details}"\n'
+        for row in rows
+    )
+    return header + body
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/policy-dry-run", response_model=LogAnalyticsPolicyDryRun)
+def ai_log_policy_dry_run(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    impact_mode: str = "weighted",
+    tenant_id: str | None = None,
+) -> LogAnalyticsPolicyDryRun:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+
+    parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+    parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+    parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+
+    try:
+        return service.preview_ai_log_policy_effect(
+            asset_id=asset_id,
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            limit=min(max(limit, 20), 2000),
+            tenant_id=tenant_scope,
+            impact_mode=impact_mode,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/ai-log-analytics/overview", response_model=LogAnalyticsOverview)
+def get_ai_log_analytics_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 50,
+    max_clusters: int = 30,
+    max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    tenant_id: str | None = None,
+) -> LogAnalyticsOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+    parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+    parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+
+    try:
+        resolved_sources, resolved_signatures = service.resolve_ai_log_filters(
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            tenant_id=tenant_scope,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return service.build_log_analytics_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_clusters=min(max(max_clusters, 5), 100),
+        max_anomalies=min(max(max_anomalies, 1), 100),
+        ignore_sources=resolved_sources,
+        ignore_signatures=resolved_signatures,
+        asset_ids=tenant_assets,
+    )
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics", response_model=LogAnalyticsInsight)
+def get_ai_log_analytics(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    max_clusters: int = 30,
+    max_anomalies: int = 20,
+    ignore_sources: str = "",
+    ignore_signatures: str = "",
+    policy_id: str | None = None,
+    policy_ids: str = "",
+    policy_merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
+    tenant_id: str | None = None,
+) -> LogAnalyticsInsight:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        parsed_ignore_sources = {item.strip().lower() for item in ignore_sources.split(",") if item.strip()}
+        parsed_ignore_signatures = {item.strip().lower() for item in ignore_signatures.split(",") if item.strip()}
+        parsed_policy_ids = [item.strip() for item in policy_ids.split(",") if item.strip()]
+        resolved_sources, resolved_signatures = service.resolve_ai_log_filters(
+            ignore_sources=parsed_ignore_sources,
+            ignore_signatures=parsed_ignore_signatures,
+            policy_id=policy_id,
+            policy_ids=parsed_policy_ids,
+            merge_strategy=policy_merge_strategy,
+            tenant_id=tenant_scope,
+        )
+        return service.build_log_analytics(
+            asset_id,
+            limit=min(max(limit, 20), 2000),
+            max_clusters=min(max(max_clusters, 5), 100),
+            max_anomalies=min(max(max_anomalies, 1), 100),
+            ignore_sources=resolved_sources,
+            ignore_signatures=resolved_signatures,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/ai-log-analytics/dependency-map/overview", response_model=DependencyMapOverview)
+def get_ai_log_dependency_map_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 50,
+    max_edges: int = 30,
+    tenant_id: str | None = None,
+) -> DependencyMapOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    return service.build_dependency_map_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        max_edges=min(max(max_edges, 1), 100),
+        asset_ids=tenant_assets,
+    )
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/dependency-map", response_model=DependencyMap)
+def get_ai_log_dependency_map(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    max_edges: int = 20,
+    tenant_id: str | None = None,
+) -> DependencyMap:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_dependency_map(
+            asset_id,
+            limit=min(max(limit, 20), 2000),
+            max_edges=min(max(max_edges, 1), 100),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/runbook-hints", response_model=LogAnalyticsRunbookHints)
+def get_ai_log_runbook_hints(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    tenant_id: str | None = None,
+) -> LogAnalyticsRunbookHints:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_log_runbook_hints(asset_id, limit=min(max(limit, 20), 2000))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/ai-log-analytics/incident-brief/overview", response_model=IncidentBriefOverview)
+def get_ai_log_incident_brief_overview(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 25,
+    min_confidence: float = 0.0,
+    tenant_id: str | None = None,
+) -> IncidentBriefOverview:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    return service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=min(max(min_confidence, 0.0), 1.0),
+        asset_ids=tenant_assets,
+    )
+
+
+@app.get("/ai-log-analytics/incident-brief/overview.csv", response_class=PlainTextResponse)
+def get_ai_log_incident_brief_overview_csv(
+    request: Request,
+    limit_per_asset: int = 300,
+    max_assets: int = 25,
+    min_confidence: float = 0.0,
+    tenant_id: str | None = None,
+) -> str:
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    tenant_assets = {asset.id for asset in service.list_assets() if _asset_in_tenant(asset.id, tenant_scope)}
+    overview = service.build_incident_brief_overview(
+        limit_per_asset=min(max(limit_per_asset, 20), 2000),
+        max_assets=min(max(max_assets, 1), 200),
+        min_confidence=min(max(min_confidence, 0.0), 1.0),
+        asset_ids=tenant_assets,
+    )
+    header = "asset_id,confidence,headline,anomaly_reasons,runbook_actions,dependency_hotspots\n"
+    rows = ''.join(
+        f'"{item.asset_id}","{item.confidence}","{item.headline}","{"; ".join(item.anomaly_reasons)}","{"; ".join(item.runbook_actions)}","{"; ".join(item.dependency_hotspots)}"\n'
+        for item in overview.briefs
+    )
+    return header + rows
+
+
+@app.get("/assets/{asset_id}/ai-log-analytics/incident-brief", response_model=IncidentBrief)
+def get_ai_log_incident_brief(
+    request: Request,
+    asset_id: str,
+    limit: int = 300,
+    tenant_id: str | None = None,
+) -> IncidentBrief:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    try:
+        return service.build_incident_brief(asset_id, limit=min(max(limit, 20), 2000))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/assets/{asset_id}/recommendation", response_model=Recommendation)
