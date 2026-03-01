@@ -298,6 +298,7 @@ def test_winrm_pull_uses_target_options() -> None:
     assert rows[0]["LogName"] == "Security"
     assert "LogName=@('Security')" in DummyWinRM.last_ps
     assert "Select-Object -First 10" in DummyWinRM.last_ps
+    assert "[Console]::OutputEncoding" in DummyWinRM.last_ps
 
 def test_winrm_real_pull_path_with_mock() -> None:
     client.post(
@@ -345,6 +346,85 @@ def test_winrm_real_pull_path_with_mock() -> None:
 
     events_resp = client.get("/assets/win-cursor/events")
     assert any("RecordId=11" in e["message"] for e in events_resp.json())
+
+
+def test_winrm_pull_reports_timeout_error() -> None:
+    class DummySession:
+        def __init__(self, endpoint, auth, transport, server_cert_validation):
+            pass
+
+        def run_ps(self, ps):
+            raise RuntimeError(
+                "HTTPConnectionPool(host='192.168.0.12', port=5985): Max retries exceeded with url: /wsman "
+                "(Caused by ConnectTimeoutError(, 'Connection to 192.168.0.12 timed out. (connect timeout=30)'))"
+            )
+
+    class DummyWinRM:
+        Session = DummySession
+
+    sys.modules["winrm"] = DummyWinRM
+    client.post(
+        "/assets",
+        json={"id": "win-timeout", "name": "win-timeout", "asset_type": "server", "location": "R11"},
+    )
+
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-timeout",
+            name="timeout",
+            address="192.168.0.12",
+            collector_type=main_module.CollectorType.winrm,
+            port=5985,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="win-timeout",
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_winrm_records(target, None)
+
+    assert "WinRM endpoint timeout" in str(exc.value)
+
+
+def test_winrm_pull_reports_unicode_credential_encoding_error() -> None:
+    class DummySession:
+        def __init__(self, endpoint, auth, transport, server_cert_validation):
+            pass
+
+        def run_ps(self, ps):
+            raise UnicodeEncodeError("latin-1", "тест", 0, 4, "ordinal not in range")
+
+    class DummyWinRM:
+        Session = DummySession
+
+    sys.modules["winrm"] = DummyWinRM
+    client.post(
+        "/assets",
+        json={"id": "win-cred", "name": "win-cred", "asset_type": "server", "location": "R10"},
+    )
+
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-cred",
+            name="cred",
+            address="10.0.0.12",
+            collector_type=main_module.CollectorType.winrm,
+            port=5985,
+            username="админ",
+            password="пароль",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="win-cred",
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_winrm_records(target, None)
+
+    assert "cannot encode non-Latin credentials" in str(exc.value)
 
 
 def test_collector_password_encryption_roundtrip() -> None:
