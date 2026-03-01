@@ -695,6 +695,28 @@ def test_ui_ai_policy_center_crud_and_dry_run() -> None:
 
 
 
+def test_ui_ai_policy_center_supports_edit_prefill() -> None:
+    save = client.post(
+        "/ui/ai/policies",
+        data={
+            "policy_id": "ui-pol-edit",
+            "name": "UI policy edit",
+            "tenant_id": "",
+            "ignore_sources": "syslog,linux",
+            "ignore_signatures": "timeout",
+            "enabled": "on",
+        },
+        follow_redirects=False,
+    )
+    assert save.status_code == 303
+
+    page = client.get("/ui/ai/policies", params={"edit_policy_id": "ui-pol-edit"})
+    assert page.status_code == 200
+    assert "value='ui-pol-edit' readonly" in page.text
+    assert "Update policy" in page.text
+    assert "Cancel edit" in page.text
+    assert "Edit</a> | <form method='post' action='/ui/ai/policies/ui-pol-edit/delete'" in page.text
+
 def test_ui_ai_policy_center_audit_nav_disabled_on_first_page() -> None:
     page = client.get(
         "/ui/ai/policies",

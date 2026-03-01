@@ -1239,6 +1239,7 @@ def _render_audit_nav_link(label: str, href: str, enabled: bool, disabled_hint: 
 def ui_ai_policy_center(
     tenant_id: str = "",
     policy_id: str = "",
+    edit_policy_id: str = "",
     asset_id: str = "",
     merge_strategy: PolicyMergeStrategy = PolicyMergeStrategy.union,
     audit_action: str = "",
@@ -1257,8 +1258,17 @@ def ui_ai_policy_center(
     selected_asset_id = asset_id.strip()
 
     policies = service.list_ai_log_policies(tenant_id=tenant_scope)
+    edit_policy = next((item for item in policies if item.id == edit_policy_id.strip()), None)
+    is_policy_edit = edit_policy is not None
+    policy_form_id = edit_policy.id if edit_policy else ""
+    policy_form_name = edit_policy.name if edit_policy else ""
+    policy_form_tenant = (edit_policy.tenant_id if edit_policy else tenant_scope) or ""
+    policy_form_sources = ",".join(sorted(edit_policy.ignore_sources)) if edit_policy else ""
+    policy_form_signatures = ",".join(sorted(edit_policy.ignore_signatures)) if edit_policy else ""
+    policy_form_enabled = edit_policy.enabled if edit_policy else True
+
     policy_rows = "".join(
-        f"<tr><td>{item.id}</td><td>{item.name}</td><td>{item.tenant_id or '-'}</td><td>{'on' if item.enabled else 'off'}</td><td>{len(item.ignore_sources)}</td><td>{len(item.ignore_signatures)}</td><td><form method='post' action='/ui/ai/policies/{item.id}/delete' style='margin:0'><input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/><button type='submit'>Delete</button></form></td></tr>"
+        f"<tr><td>{item.id}</td><td>{item.name}</td><td>{item.tenant_id or '-'}</td><td>{'on' if item.enabled else 'off'}</td><td>{len(item.ignore_sources)}</td><td>{len(item.ignore_signatures)}</td><td><a href='/ui/ai/policies?tenant_id={tenant_scope or ''}&edit_policy_id={item.id}'>Edit</a> | <form method='post' action='/ui/ai/policies/{item.id}/delete' style='margin:0;display:inline'><input type='hidden' name='tenant_id' value='{tenant_scope or ''}'/><button type='submit'>Delete</button></form></td></tr>"
         for item in policies
     ) or "<tr><td colspan='7'>No policies yet.</td></tr>"
 
@@ -1425,13 +1435,13 @@ def ui_ai_policy_center(
 
       <form method='post' action='/ui/ai/policies' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
         <h3>Create/update policy</h3>
-        <label>ID <input name='policy_id' required/></label>
-        <label style='margin-left:10px'>Name <input name='name' required/></label>
-        <label style='margin-left:10px'>Tenant <input name='tenant_id' value='{tenant_scope or ''}' placeholder='optional'/></label><br/><br/>
-        <label>Ignore sources (csv) <input name='ignore_sources' style='min-width:420px'/></label><br/><br/>
-        <label>Ignore signatures (csv) <input name='ignore_signatures' style='min-width:420px'/></label><br/><br/>
-        <label><input type='checkbox' name='enabled' checked/> enabled</label><br/><br/>
-        <button type='submit'>Save policy</button>
+        <label>ID <input name='policy_id' value='{policy_form_id}' {'readonly' if is_policy_edit else ''} required/></label>
+        <label style='margin-left:10px'>Name <input name='name' value='{policy_form_name}' required/></label>
+        <label style='margin-left:10px'>Tenant <input name='tenant_id' value='{policy_form_tenant}' placeholder='optional'/></label><br/><br/>
+        <label>Ignore sources (csv) <input name='ignore_sources' value='{policy_form_sources}' style='min-width:420px'/></label><br/><br/>
+        <label>Ignore signatures (csv) <input name='ignore_signatures' value='{policy_form_signatures}' style='min-width:420px'/></label><br/><br/>
+        <label><input type='checkbox' name='enabled' {'checked' if policy_form_enabled else ''}/> enabled</label><br/><br/>
+        <button type='submit'>{'Update policy' if is_policy_edit else 'Save policy'}</button> {"<a href='/ui/ai/policies" + (f'?tenant_id={tenant_scope}' if tenant_scope else '') + "' style='margin-left:10px'>Cancel edit</a>" if is_policy_edit else ''}
       </form>
 
       <h3 style='margin-top:16px'>Policies</h3>
