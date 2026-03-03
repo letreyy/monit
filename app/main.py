@@ -99,38 +99,30 @@ COMPLIANCE_WEBHOOK_URL = os.getenv("COMPLIANCE_WEBHOOK_URL", "")
 COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
 
 
-_FLAT_UI_THEME_HEAD = """
+_BOOTSTRAP_THEME_HEAD = """
 <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-<!-- flat-ui-theme-v1 -->
+<!-- bootstrap-theme-v1 -->
 <style>
-  :root { --flat-primary: #1abc9c; --flat-primary-dark: #16a085; --flat-night: #2c3e50; --flat-cloud: #ecf0f1; --flat-muted: #95a5a6; }
-  body { font-family: 'Inter', sans-serif !important; background: #f5f7fa !important; color: var(--flat-night) !important; }
+  body { font-family: 'Inter', sans-serif !important; background: #f8f9fa !important; color: #212529 !important; }
   body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
-  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; color: var(--flat-night); }
-  a { color: var(--flat-primary-dark); text-decoration: none; }
-  a:hover { color: var(--flat-primary); }
-  table { background: #fff; border-radius: 12px; overflow: hidden; }
-  table th { background: var(--flat-cloud); color: var(--flat-night); }
-  input, select, textarea { border-radius: 10px !important; border: 2px solid #dfe6e9 !important; padding: .5rem .7rem !important; box-shadow: none !important; }
-  input:focus, select:focus, textarea:focus { border-color: var(--flat-primary) !important; }
-  button, .btn, button[type='submit'] { border-radius: 10px !important; font-weight: 600; }
-  .btn-primary { background: var(--flat-primary) !important; border-color: var(--flat-primary) !important; }
-  .btn-primary:hover { background: var(--flat-primary-dark) !important; border-color: var(--flat-primary-dark) !important; }
-  form { background: #fff; border: 1px solid #e2e8ee; border-radius: 14px; padding: 16px; box-shadow: 0 10px 24px rgba(44, 62, 80, .06); }
+  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
+  .card, form { border-radius: .9rem; }
+  table { background: #fff; }
+  table th { background: #f1f3f5; }
 </style>
 """
 
 
-def _inject_flat_ui_theme(html_text: str) -> str:
-    if "flat-ui-theme-v1" in html_text:
+def _inject_bootstrap_theme(html_text: str) -> str:
+    if "bootstrap-theme-v1" in html_text:
         return html_text
     if "</head>" in html_text:
-        return html_text.replace("</head>", f"{_FLAT_UI_THEME_HEAD}</head>", 1)
+        return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
     if "<html>" in html_text:
-        return html_text.replace("<html>", f"<html><head>{_FLAT_UI_THEME_HEAD}</head>", 1)
+        return html_text.replace("<html>", f"<html><head>{_BOOTSTRAP_THEME_HEAD}</head>", 1)
     return html_text
 
 
@@ -525,7 +517,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
 
 @app.middleware("http")
-async def flat_ui_theme_middleware(request: Request, call_next):
+async def bootstrap_theme_middleware(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/static") or request.url.path.startswith("/docs") or request.url.path.startswith("/redoc") or request.url.path.startswith("/openapi"):
         return response
@@ -536,7 +528,7 @@ async def flat_ui_theme_middleware(request: Request, call_next):
     async for chunk in response.body_iterator:
         body += chunk
     html_text = body.decode("utf-8", errors="ignore")
-    themed = _inject_flat_ui_theme(html_text)
+    themed = _inject_bootstrap_theme(html_text)
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
@@ -1028,9 +1020,9 @@ def ui_assets(edit_id: str = "") -> str:
             f"<td><span class='badge rounded-pill text-bg-light border border-2'>{esc(asset.asset_type.value)}</span></td>"
             f"<td>{location_cell}</td>"
             "<td class='d-flex flex-wrap gap-2'>"
-            f"<a class='btn btn-sm btn-primary' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
+            f"<a class='btn btn-sm btn-outline-primary' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
             f"<form method='post' action='/ui/assets/{esc(asset.id)}/delete' style='margin:0'>"
-            "<button class='btn btn-sm btn-danger' type='submit'>Delete</button>"
+            "<button class='btn btn-sm btn-outline-danger' type='submit'>Delete</button>"
             "</form>"
             "</td></tr>"
         )
@@ -1052,31 +1044,27 @@ def ui_assets(edit_id: str = "") -> str:
       <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
       <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap' rel='stylesheet'>
       <style>
-        :root {{ --flat-primary:#1abc9c; --flat-primary-dark:#16a085; --flat-night:#2c3e50; --flat-cloud:#ecf0f1; }}
         body {{
           font-family: 'Inter', sans-serif;
-          background: #f5f7fa;
-          color: var(--flat-night);
+          background: #f8f9fa;
+          color: #212529;
         }}
         .hero {{
-          background: var(--flat-night);
+          background: linear-gradient(135deg, #0d6efd, #0b5ed7);
           border-radius: 1rem;
           color: #fff;
-          box-shadow: 0 16px 30px rgba(44, 62, 80, 0.2);
         }}
         .section-card {{
-          border: 0;
+          border: 1px solid #e9ecef;
           border-radius: 1rem;
-          box-shadow: 0 10px 24px rgba(44, 62, 80, 0.08);
+          box-shadow: 0 0.5rem 1rem rgba(0,0,0,.05);
         }}
-        .btn-primary {{ background: var(--flat-primary); border-color: var(--flat-primary); }}
-        .btn-primary:hover {{ background: var(--flat-primary-dark); border-color: var(--flat-primary-dark); }}
         .asset-link {{
           font-weight: 600;
-          color: var(--flat-primary-dark);
+          color: #0d6efd;
           text-decoration: none;
         }}
-        .asset-link:hover {{ color: var(--flat-primary); text-decoration: underline; }}
+        .asset-link:hover {{ text-decoration: underline; }}
       </style>
     </head>
     <body>
@@ -1090,7 +1078,7 @@ def ui_assets(edit_id: str = "") -> str:
             </div>
             <div class='d-flex gap-2'>
               <a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a>
-              <a href='/ui/ai' class='btn btn-sm px-3' style='background:#1abc9c;border-color:#1abc9c;color:#fff'>AI analytics</a>
+              <a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a>
             </div>
           </div>
         </section>
