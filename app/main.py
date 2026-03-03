@@ -101,61 +101,206 @@ COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
 
 
 _BOOTSTRAP_THEME_HEAD = """
-<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-<!-- bootstrap-theme-v2 -->
+<!-- human-ui-theme-v1 -->
 <style>
-  body, body[style] { font-family: 'Inter', sans-serif !important; background: #f8f9fa !important; color: #212529 !important; }
-  body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
-  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; color: #212529; }
-  a { color: #0d6efd; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-
-  div[style*='background:#fff;border:1px solid #d8dee4'],
-  form[style*='background:#fff;border:1px solid #d8dee4'],
-  table[style*='background:#fff;border:1px solid #d8dee4'] {
-    border: 1px solid #e9ecef !important;
-    border-radius: 1rem !important;
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,.05) !important;
-    background: #fff !important;
+  :root {
+    --bg: #f3f5f9;
+    --surface: #ffffff;
+    --surface-soft: #f8fafc;
+    --text: #0f172a;
+    --muted: #475569;
+    --line: #dde3ea;
+    --accent: #2563eb;
+    --accent-2: #7c3aed;
+    --ok: #059669;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 10px;
   }
 
-  form { border-radius: 1rem !important; }
-  form label { display: block; font-weight: 500; margin-bottom: .6rem; }
+  * { box-sizing: border-box; }
+
+  body, body[style] {
+    margin: 0 !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    color: var(--text) !important;
+    background:
+      radial-gradient(circle at top right, rgba(37, 99, 235, .08), transparent 35%),
+      radial-gradient(circle at left -10%, rgba(124, 58, 237, .07), transparent 38%),
+      var(--bg) !important;
+    min-height: 100vh;
+    line-height: 1.45;
+  }
+
+  #human-ui-shell {
+    width: min(1400px, 98vw);
+    margin: 1rem auto;
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .human-sidebar {
+    position: sticky;
+    top: 1rem;
+    background: linear-gradient(180deg, #111827, #1f2937);
+    color: #e5e7eb;
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255, 255, 255, .08);
+    box-shadow: 0 18px 35px rgba(15, 23, 42, .25);
+    padding: 1rem;
+  }
+
+  .human-brand {
+    margin: 0 0 1rem;
+    padding-bottom: .9rem;
+    border-bottom: 1px solid rgba(255,255,255,.14);
+  }
+
+  .human-brand small { display: block; opacity: .75; text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
+  .human-brand strong { display: block; font-size: 1.05rem; color: #fff; margin-top: .2rem; }
+
+  .human-nav { display: grid; gap: .35rem; }
+
+  .human-nav a {
+    display: block;
+    color: #dbeafe;
+    text-decoration: none;
+    padding: .56rem .68rem;
+    border-radius: 9px;
+    font-size: .92rem;
+    border: 1px solid transparent;
+  }
+
+  .human-nav a:hover {
+    background: rgba(37, 99, 235, .17);
+    border-color: rgba(147, 197, 253, .32);
+    text-decoration: none;
+  }
+
+  .human-nav a.active {
+    background: linear-gradient(130deg, rgba(37,99,235,.3), rgba(124,58,237,.32));
+    color: #fff;
+    border-color: rgba(191, 219, 254, .45);
+    font-weight: 600;
+  }
+
+  .human-content {
+    min-width: 0;
+    background: rgba(255,255,255,.75);
+    backdrop-filter: blur(3px);
+    border: 1px solid #e7ecf2;
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+  }
+
+  .human-page-header {
+    border-radius: 14px;
+    color: #fff;
+    padding: 1.15rem 1.2rem;
+    background: linear-gradient(120deg, #1e293b, #334155 55%, #475569);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .26);
+    margin-bottom: 1rem;
+  }
+
+  .human-page-header .kicker { margin: 0 0 .32rem; opacity: .8; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+  .human-page-header h1 { margin: 0; color: #fff; font-size: clamp(1.3rem, 2.4vw, 1.9rem); }
+
+  .human-page-body > .container,
+  .human-page-body > div.wrap,
+  .human-page-body > div,
+  .human-page-body > main {
+    max-width: 100% !important;
+    margin: 0 0 .9rem !important;
+  }
+
+  h1, h2, h3, h4 { color: #0b1220; letter-spacing: -.01em; }
+  p, li, td, th, label, span { color: inherit; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: #1d4ed8; text-decoration: underline; }
+
+  .human-page-body > *,
+  div[style*='background:#fff;border:1px solid #d8dee4'],
+  form,
+  table,
+  pre,
+  .card {
+    border: 1px solid var(--line) !important;
+    background: var(--surface) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+  }
+
+  .human-page-body > * { padding: .95rem; }
+
+  form { padding: 1rem !important; }
+  label { font-size: .9rem; font-weight: 600; color: #1e293b; }
+
   input, select, textarea {
-    border-radius: .65rem !important;
-    border: 1px solid #ced4da !important;
-    padding: .45rem .7rem !important;
+    border: 1px solid #cfd8e3 !important;
+    border-radius: var(--radius-sm) !important;
+    background: #fff !important;
+    color: var(--text) !important;
+    padding: .55rem .72rem !important;
     font: inherit;
   }
+
   input:focus, select:focus, textarea:focus {
-    border-color: #86b7fe !important;
-    box-shadow: 0 0 0 .2rem rgba(13,110,253,.15) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 .2rem rgba(37,99,235,.16) !important;
     outline: none;
   }
 
   button, .btn, button[type='submit'] {
-    border-radius: .65rem !important;
+    border-radius: 10px !important;
+    border: 1px solid var(--accent) !important;
+    background: linear-gradient(130deg, var(--accent), #1d4ed8) !important;
+    color: #fff !important;
+    padding: .48rem .86rem !important;
     font-weight: 600;
-    border: 1px solid #0d6efd;
-    background: #0d6efd;
-    color: #fff;
-    padding: .4rem .8rem;
   }
-  button:hover, .btn:hover, button[type='submit']:hover { background: #0b5ed7; border-color: #0b5ed7; color: #fff; }
 
-  table { background: #fff; border-collapse: separate; border-spacing: 0; width: 100%; }
-  table thead th { background: #f1f3f5; }
-  table th, table td { padding: .65rem .75rem; vertical-align: middle; }
-  .hero { background: linear-gradient(135deg, #0d6efd, #0b5ed7); border-radius: 1rem; color: #fff; box-shadow: 0 .75rem 1.25rem rgba(13,110,253,.22); }
+  button:hover, .btn:hover, button[type='submit']:hover {
+    background: linear-gradient(130deg, #1d4ed8, #1e40af) !important;
+    text-decoration: none !important;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+  }
+
+  table thead th {
+    background: var(--surface-soft);
+    color: #334155;
+    font-weight: 700;
+  }
+
+  table th, table td {
+    padding: .65rem .72rem;
+    border-bottom: 1px solid #eef2f7;
+    vertical-align: middle;
+  }
+
+  @media (max-width: 980px) {
+    #human-ui-shell { grid-template-columns: 1fr; }
+    .human-sidebar { position: static; }
+  }
 </style>
 """
 
 
 def _inject_bootstrap_theme(html_text: str) -> str:
-    if "bootstrap-theme-v2" in html_text:
+    if "human-ui-theme-v1" in html_text:
         return html_text
     if "</head>" in html_text:
         return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
@@ -164,38 +309,59 @@ def _inject_bootstrap_theme(html_text: str) -> str:
     return html_text
 
 
-
-
-
-def _inject_bootstrap_page_hero(html_text: str, current_path: str) -> str:
-    if "page-hero-v1" in html_text or "<section class='hero p-4 p-lg-5 mb-4'>" in html_text:
+def _inject_human_shell(html_text: str, current_path: str) -> str:
+    if "id='human-ui-shell'" in html_text:
         return html_text
 
-    labels = {
-        "/": ("Infrastructure UI", "InfraMind Monitor", "Операционная консоль мониторинга и аналитики."),
-        "/dashboard": ("Infrastructure UI", "Dashboard", "Единая панель состояния активов, событий и рисков."),
-        "/ui/auth": ("Infrastructure UI", "Auth Console", "Управление сессиями и проверка контекста доступа."),
-        "/ui/compliance": ("Infrastructure UI", "Compliance Center", "Контроль соответствия и отчётности по безопасности."),
-        "/ui/collectors": ("Infrastructure UI", "Collectors", "Настройка agentless-коллекторов и их параметров."),
-        "/ui/events": ("Infrastructure UI", "Events", "Регистрация и анализ инфраструктурных событий."),
-        "/ui/ai": ("Infrastructure UI", "AI Analytics", "Аномалии, инсайты и рекомендации на основе логов."),
-        "/ui/ai/policies": ("Infrastructure UI", "AI Policy Center", "Управление политиками аналитики и исключениями."),
-        "/ui/csb-merp": ("Infrastructure UI", "CSB MERP Logs", "Импорт и анализ CSB MERP текстовых логов."),
-        "/ui/diagnostics": ("Infrastructure UI", "Diagnostics", "Диагностика worker и служебных подсистем."),
-    }
-    over, title, desc = labels.get(current_path, ("Infrastructure UI", "Console", "Управление мониторингом инфраструктуры."))
-    hero=(
-        "<!-- page-hero-v1 -->"
-        "<section class='hero p-4 p-lg-5 mb-4'>"
-        "<div class='d-flex flex-wrap justify-content-between align-items-end gap-3'>"
-        f"<div><p class='text-uppercase small mb-2 opacity-75'>{over}</p><h1 class='display-6 fw-bold mb-2'>{title}</h1><p class='mb-0 opacity-75'>{desc}</p></div>"
-        "<div class='d-flex gap-2'><a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a><a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a></div>"
-        "</div></section>"
+    routes = [
+        ("/dashboard", "Dashboard"),
+        ("/ui/events", "Events"),
+        ("/ui/assets", "Assets"),
+        ("/ui/collectors", "Collectors"),
+        ("/ui/ai", "AI Analytics"),
+        ("/ui/ai/policies", "AI Policies"),
+        ("/ui/compliance", "Compliance"),
+        ("/ui/auth", "Auth"),
+        ("/ui/csb-merp", "CSB MERP"),
+        ("/ui/diagnostics", "Diagnostics"),
+    ]
+
+    nav_links = "".join(
+        f"<a href='{href}' class='{'active' if current_path == href else ''}'>{label}</a>"
+        for href, label in routes
     )
 
-    if "<main" in html_text:
-        return re.sub(r"(<main[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
-    return re.sub(r"(<body[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
+    titles = {
+        "/": "Главная",
+        "/dashboard": "Dashboard",
+        "/ui/events": "События",
+        "/ui/assets": "Активы",
+        "/ui/collectors": "Коллекторы",
+        "/ui/ai": "AI аналитика",
+        "/ui/ai/policies": "Политики AI",
+        "/ui/compliance": "Соответствие",
+        "/ui/auth": "Доступ",
+        "/ui/csb-merp": "CSB MERP",
+        "/ui/diagnostics": "Диагностика",
+    }
+    page_title = titles.get(current_path, "Мониторинг")
+
+    body_open = (
+        "<div id='human-ui-shell'>"
+        "<aside class='human-sidebar'>"
+        "<div class='human-brand'><small>InfraMind Monitor</small><strong>Панель управления</strong></div>"
+        f"<nav class='human-nav'>{nav_links}</nav>"
+        "</aside>"
+        "<section class='human-content'>"
+        "<header class='human-page-header'><p class='kicker'>Инфраструктурный мониторинг</p>"
+        f"<h1>{page_title}</h1></header>"
+        "<div class='human-page-body'>"
+    )
+    body_close = "</div></section></div>"
+
+    html_text = re.sub(r"(<body[^>]*>)", r"\1" + body_open, html_text, count=1, flags=re.IGNORECASE)
+    html_text = re.sub(r"</body>", body_close + "</body>", html_text, count=1, flags=re.IGNORECASE)
+    return html_text
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -599,8 +765,7 @@ async def bootstrap_theme_middleware(request: Request, call_next):
         body += chunk
     html_text = body.decode("utf-8", errors="ignore")
     themed = _inject_bootstrap_theme(html_text)
-    if request.url.path == "/" or request.url.path == "/dashboard" or (request.url.path.startswith("/ui/") and request.url.path != "/ui/assets"):
-        themed = _inject_bootstrap_page_hero(themed, request.url.path)
+    themed = _inject_human_shell(themed, request.url.path)
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
