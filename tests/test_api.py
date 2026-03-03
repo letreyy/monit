@@ -132,6 +132,7 @@ def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
     assert "data-collector-scope='winrm'" in page.text
     assert "data-collector-scope='ssh' style='display:none" in page.text
     assert "data-collector-scope='snmp' style='display:none" in page.text
+    assert "data-collector-scope='csb_merp_share' style='display:none" in page.text
     assert "toggleCollectorFields()" in page.text
 
 def test_ui_assets_and_collectors_support_edit_prefill() -> None:
@@ -2330,3 +2331,277 @@ def test_compliance_purge_cleans_ai_policy_audit() -> None:
     )
     assert purge.status_code == 200
     assert purge.json()["deleted_ai_policy_audit"] >= 0
+
+
+
+def test_ui_csb_merp_import_and_report(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-ui", "name": "merp-ui", "asset_type": "server", "location": "R2"},
+    )
+
+    log_dir = tmp_path / "logs" / "20260303" / "51101" / "http_10.64.28.23"
+    log_dir.mkdir(parents=True)
+    (log_dir / "ui_session.txt").write_text(
+        "\n".join(
+            [
+                '03.03.2026 10:17:07.638 46192204-001 ID 4635491 Write     SYS+LOGIN;!:L1+903003+2:L2+4824+82+9048+"Татьяна"+"Корниясева":L3+"":L4+20260303+101707+1772522227+-180+0:L5+9999+0',
+                '03.03.2026 10:17:07.778 46192204-001 ID 4649403 Query     SYS+SKRIPT;?:L1+"64_TMC_SPE":L2+"887ABC0FB2CFEFF7D76CEE2DCD27191B":L3+8:L4+0',
+                '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest = client.post(
+        "/ui/csb-merp/ingest",
+        data={
+            "asset_id": "merp-ui",
+            "base_path": str(tmp_path / "logs"),
+            "glob_pattern": "*.txt",
+            "max_files": "5000",
+            "recursive": "on",
+        },
+        follow_redirects=False,
+    )
+    assert ingest.status_code == 303
+    assert "/ui/csb-merp?asset_id=merp-ui" in ingest.headers["location"]
+
+    page = client.get(
+        "/ui/csb-merp",
+        params={
+            "asset_id": "merp-ui",
+            "sscc": "246700022810196136",
+            "script": "",
+            "user": "",
+        },
+    )
+    assert page.status_code == 200
+    assert "CSB MERP log center" in page.text
+    assert "246700022810196136" in page.text
+    assert "DT8580+SSCCDET" in page.text
+
+def test_csb_merp_ingest_and_report_filters(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-01", "name": "merp-01", "asset_type": "server", "location": "R1"},
+    )
+
+    log_dir = tmp_path / "logs" / "20260303" / "51101" / "http_10.64.28.23"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "session.txt"
+    log_file.write_text(
+        "\n".join(
+            [
+                '03.03.2026 10:17:07.638 46192204-001 ID 4635491 Write     SYS+LOGIN;!:L1+903003+2:L2+4824+82+9048+"Татьяна"+"Корниясева":L3+"":L4+20260303+101707+1772522227+-180+0:L5+9999+0',
+                '03.03.2026 10:17:07.778 46192204-001 ID 4649403 Query     SYS+SKRIPT;?:L1+"64_TMC_SPE":L2+"887ABC0FB2CFEFF7D76CEE2DCD27191B":L3+8:L4+0',
+                '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136',
+                '03.03.2026 10:17:08.981 46192204-002 ID 4635491 Write     SYS+ERRINFO;!:L1+4007+2+"Недействительный код строки к модулю. Ошибочные входные данные."+""+"":L2+2+0+0+0+0+""+"KVAR"+" 0000 KVAR"+"SYS+KVAR;?:"+""+"":L3+0',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest_resp = client.post(
+        "/ingest/csb-merp",
+        json={"asset_id": "merp-01", "base_path": str(tmp_path / "logs")},
+    )
+    assert ingest_resp.status_code == 200
+    assert ingest_resp.json()["events_accepted"] == 4
+
+    by_sscc = client.get("/assets/merp-01/csb-merp/report", params={"sscc": "246700022810196136"})
+    assert by_sscc.status_code == 200
+    assert by_sscc.json()["matched_lines"] == 1
+    assert by_sscc.json()["sscc_touched"] == ["246700022810196136"]
+
+    by_script = client.get("/assets/merp-01/csb-merp/report", params={"script": "64_TMC_SPE"})
+    assert by_script.status_code == 200
+    assert by_script.json()["matched_lines"] == 1
+    assert by_script.json()["scripts_touched"] == ["64_TMC_SPE"]
+
+    by_user = client.get("/assets/merp-01/csb-merp/report", params={"user": "4824"})
+    assert by_user.status_code == 200
+    assert by_user.json()["matched_lines"] == 1
+    assert by_user.json()["users_touched"][0].startswith("4824")
+
+
+
+
+def test_worker_collects_csb_merp_share_incrementally(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-worker", "name": "merp-worker", "asset_type": "server", "location": "R7"},
+    )
+
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    log_file = logs_dir / "part1.txt"
+    log_file.write_text(
+        '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136\n',
+        encoding="utf-8",
+    )
+
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-merp-share",
+            "name": "MERP share",
+            "collector_type": "csb_merp_share",
+            "address": "local",
+            "port": 0,
+            "username": "n/a",
+            "password": "n/a",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "merp-worker",
+            "csb_share_path": str(logs_dir),
+            "csb_glob_pattern": "*.txt",
+            "csb_recursive": True,
+            "csb_max_files": 100,
+            "csb_source": "csb_merp_txt",
+        },
+    )
+
+    run1 = client.post("/worker/run-once")
+    assert run1.status_code == 200
+
+    events1 = client.get("/assets/merp-worker/events").json()
+    assert sum(1 for e in events1 if e["source"] == "csb_merp_txt") == 1
+
+    # append one more line and ensure only the delta is collected on next run
+    with log_file.open("a", encoding="utf-8") as fh:
+        fh.write('03.03.2026 10:17:18.231 46192204-002 ID 4649403 Query     SYS+MESSAGE;?:L1+4241\n')
+
+    main_module.worker._last_run_at["col-merp-share"] = 0
+    run2 = client.post("/worker/run-once")
+    assert run2.status_code == 200
+
+    events2 = client.get("/assets/merp-worker/events").json()
+    assert sum(1 for e in events2 if e["source"] == "csb_merp_txt") == 2
+
+
+def test_csb_merp_ingest_supports_unc_path_with_smbclient(monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/assets", json={"id": "merp-unc", "name": "merp-unc", "asset_type": "server", "location": "R8"})
+
+    class _Entry:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        def is_file(self) -> bool:
+            return True
+
+    class _Reader:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def read(self) -> bytes:
+            return self.payload
+
+    class FakeSMB:
+        @staticmethod
+        def register_session(server, username=None, password=None):
+            assert server == "10.10.10.10"
+            assert username == "user"
+            assert password == "pass"
+        @staticmethod
+        def walk(path):
+            yield (r"\\10.10.10.10\merp\logs", [], ["a.txt"])
+        @staticmethod
+        def scandir(path):
+            return [_Entry("a.txt")]
+        @staticmethod
+        def open_file(path, mode="rb"):
+            return _Reader(b'03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136\n')
+
+    monkeypatch.setitem(sys.modules, "smbclient", FakeSMB)
+
+    resp = client.post(
+        "/ingest/csb-merp",
+        json={
+            "asset_id": "merp-unc",
+            "base_path": "//10.10.10.10/merp/logs",
+            "glob_pattern": "*.txt",
+            "recursive": True,
+            "smb_username": "user",
+            "smb_password": "pass",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["events_accepted"] == 1
+
+
+def test_worker_collects_csb_merp_unc_share(monkeypatch: pytest.MonkeyPatch) -> None:
+    client.post("/assets", json={"id": "merp-unc-worker", "name": "merp-unc-worker", "asset_type": "server", "location": "R9"})
+
+    class _Stat:
+        st_size = 100
+
+    class _Reader:
+        def __init__(self, payload: bytes) -> None:
+            self.payload = payload
+            self._pos = 0
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc, tb):
+            return False
+        def seek(self, offset: int) -> None:
+            self._pos = offset
+        def read(self) -> bytes:
+            return self.payload[self._pos:]
+        def tell(self) -> int:
+            return len(self.payload)
+
+    class _Entry:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        def is_file(self) -> bool:
+            return True
+
+    payload = b'03.03.2026 10:17:18.231 46192204-002 ID 4649403 Query     SYS+MESSAGE;?:L1+4241\n'
+
+    class FakeSMB:
+        @staticmethod
+        def register_session(server, username=None, password=None):
+            assert server == "10.10.10.10"
+        @staticmethod
+        def walk(path):
+            yield (r"\\10.10.10.10\merp\logs", [], ["a.txt"])
+        @staticmethod
+        def scandir(path):
+            return [_Entry("a.txt")]
+        @staticmethod
+        def stat(path):
+            return _Stat()
+        @staticmethod
+        def open_file(path, mode="rb"):
+            return _Reader(payload)
+
+    monkeypatch.setitem(sys.modules, "smbclient", FakeSMB)
+
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-merp-unc",
+            "name": "MERP UNC",
+            "collector_type": "csb_merp_share",
+            "address": "local",
+            "port": 0,
+            "username": "user",
+            "password": "pass",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "merp-unc-worker",
+            "csb_share_path": "//10.10.10.10/merp/logs",
+            "csb_glob_pattern": "*.txt",
+            "csb_recursive": True,
+            "csb_max_files": 100,
+            "csb_source": "csb_merp_txt",
+        },
+    )
+
+    run = client.post("/worker/run-once")
+    assert run.status_code == 200
+    events = client.get("/assets/merp-unc-worker/events").json()
+    assert any(e["source"] == "csb_merp_txt" and "SYS+MESSAGE" in e["message"] for e in events)

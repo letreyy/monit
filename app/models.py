@@ -21,6 +21,7 @@ class CollectorType(str, Enum):
     winrm = "winrm"
     ssh = "ssh"
     snmp = "snmp"
+    csb_merp_share = "csb_merp_share"
 
 
 class Asset(BaseModel):
@@ -52,6 +53,11 @@ class CollectorTarget(BaseModel):
     snmp_community: str = "public"
     snmp_version: str = "2c"
     snmp_oids: str = "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"
+    csb_share_path: str = ""
+    csb_glob_pattern: str = "*.txt"
+    csb_recursive: bool = True
+    csb_max_files: int = Field(default=2000, ge=1, le=50000)
+    csb_source: str = "csb_merp_txt"
 
 
 class CollectorTargetPublic(BaseModel):
@@ -76,6 +82,11 @@ class CollectorTargetPublic(BaseModel):
     snmp_community: str = "********"
     snmp_version: str
     snmp_oids: str
+    csb_share_path: str
+    csb_glob_pattern: str
+    csb_recursive: bool
+    csb_max_files: int
+    csb_source: str
 
     @classmethod
     def from_target(cls, target: "CollectorTarget") -> "CollectorTargetPublic":
@@ -318,3 +329,50 @@ class AccessAuditEntry(BaseModel):
     role: str
     action: str
     result: str
+
+
+class CsbMerpIngestRequest(BaseModel):
+    asset_id: str
+    base_path: str
+    recursive: bool = True
+    glob_pattern: str = "*.txt"
+    max_files: int = Field(5000, ge=1, le=50000)
+    smb_username: str | None = None
+    smb_password: str | None = None
+
+
+class CsbMerpIngestSummary(BaseModel):
+    asset_id: str
+    base_path: str
+    files_found: int = Field(..., ge=0)
+    files_processed: int = Field(..., ge=0)
+    lines_seen: int = Field(..., ge=0)
+    lines_parsed: int = Field(..., ge=0)
+    events_accepted: int = Field(..., ge=0)
+
+
+class CsbMerpChainItem(BaseModel):
+    timestamp: str
+    session: str
+    thread_id: str
+    kind: str
+    command: str
+    payload: str
+    sscc: list[str] = Field(default_factory=list)
+    script: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class CsbMerpReport(BaseModel):
+    asset_id: str
+    total_lines: int = Field(..., ge=0)
+    matched_lines: int = Field(..., ge=0)
+    filters: dict[str, str]
+    sscc_touched: list[str] = Field(default_factory=list)
+    scripts_touched: list[str] = Field(default_factory=list)
+    users_touched: list[str] = Field(default_factory=list)
+    errors: list[dict[str, str]] = Field(default_factory=list)
+    chain: list[CsbMerpChainItem] = Field(default_factory=list)
