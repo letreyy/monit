@@ -19,6 +19,7 @@
   - `/ui/collectors` — настройка collector targets,
   - `/ui/diagnostics` — диагностика worker,
   - `/ui/ai` и `/ui/ai/policies` — AI аналитика и политики.
+  - `/ui/csb-merp` — импорт/поиск CSB MERP txt-логов и цепочки по SSCC/скрипту/пользователю.
 - Технические интерфейсы: `/docs`, `/redoc`, `/dashboard`.
 
 ### 1.3 Авто-сбор
@@ -309,3 +310,40 @@ curl -sS -X POST http://127.0.0.1:8050/collectors \
   - логин/пароль,
   - доступ к `ssh_log_path`,
   - корректность `ssh_metrics_command`.
+
+## 7) CSB MERP txt-логи (Windows share / SMB)
+
+Для сценариев вида `\\logs\\20260303\\51101\\http_10.64.28.23\\*.txt`:
+
+1. Смонтируйте Windows-шару в ОС, где запущен API (например, в Linux через CIFS в `/mnt/merp_logs`).
+2. Создайте/используйте asset (например, `merp-01`).
+3. Импортируйте логи:
+
+```bash
+curl -X POST http://127.0.0.1:8050/ingest/csb-merp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "asset_id":"merp-01",
+    "base_path":"/mnt/merp_logs/logs/20260303",
+    "recursive": true,
+    "glob_pattern":"*.txt"
+  }'
+```
+
+4. Получите отчёт-цепочку:
+
+```bash
+# По конкретному SSCC
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?sscc=246700022810196136"
+
+# По скрипту
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?script=64_TMC_SPE"
+
+# По пользователю (id/имя)
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?user=4824"
+```
+
+Отчёт содержит:
+- цепочку запросов/ответов (`Import/Query/Write`);
+- список затронутых SSCC, скриптов, пользователей;
+- ошибки `SYS+ERRINFO` (код и текст).

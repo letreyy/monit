@@ -318,3 +318,48 @@ class AccessAuditEntry(BaseModel):
     role: str
     action: str
     result: str
+
+
+class CsbMerpIngestRequest(BaseModel):
+    asset_id: str
+    base_path: str
+    recursive: bool = True
+    glob_pattern: str = "*.txt"
+    max_files: int = Field(5000, ge=1, le=50000)
+
+
+class CsbMerpIngestSummary(BaseModel):
+    asset_id: str
+    base_path: str
+    files_found: int = Field(..., ge=0)
+    files_processed: int = Field(..., ge=0)
+    lines_seen: int = Field(..., ge=0)
+    lines_parsed: int = Field(..., ge=0)
+    events_accepted: int = Field(..., ge=0)
+
+
+class CsbMerpChainItem(BaseModel):
+    timestamp: str
+    session: str
+    thread_id: str
+    kind: str
+    command: str
+    payload: str
+    sscc: list[str] = Field(default_factory=list)
+    script: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class CsbMerpReport(BaseModel):
+    asset_id: str
+    total_lines: int = Field(..., ge=0)
+    matched_lines: int = Field(..., ge=0)
+    filters: dict[str, str]
+    sscc_touched: list[str] = Field(default_factory=list)
+    scripts_touched: list[str] = Field(default_factory=list)
+    users_touched: list[str] = Field(default_factory=list)
+    errors: list[dict[str, str]] = Field(default_factory=list)
+    chain: list[CsbMerpChainItem] = Field(default_factory=list)
