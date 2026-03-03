@@ -127,6 +127,8 @@ _BOOTSTRAP_THEME_HEAD = """
 
   body, body[style] {
     margin: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     color: var(--text) !important;
     background:
@@ -138,8 +140,9 @@ _BOOTSTRAP_THEME_HEAD = """
   }
 
   #human-ui-shell {
-    width: min(1400px, 98vw);
-    margin: 1rem auto;
+    width: 100%;
+    margin: 0;
+    padding: .75rem;
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
     gap: 1rem;
@@ -1249,25 +1252,25 @@ def ui_assets(edit_id: str = "") -> str:
 
     rows = []
     for asset in assets:
-        location_cell = esc(asset.location) if asset.location else "<span class='text-muted'>—</span>"
+        location_cell = esc(asset.location) if asset.location else "<span style='color:#64748b'>—</span>"
         rows.append(
             "<tr>"
             f"<td><a class='asset-link' href='/ui/assets/{esc(asset.id)}'>{esc(asset.id)}</a></td>"
             f"<td>{esc(asset.name)}</td>"
-            f"<td><span class='badge rounded-pill text-bg-light border border-2'>{esc(asset.asset_type.value)}</span></td>"
+            f"<td><span>{esc(asset.asset_type.value)}</span></td>"
             f"<td>{location_cell}</td>"
-            "<td class='d-flex flex-wrap gap-2'>"
-            f"<a class='btn btn-sm btn-outline-primary' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
+            "<td>"
+            f"<a class='btn' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
             f"<form method='post' action='/ui/assets/{esc(asset.id)}/delete' style='margin:0'>"
-            "<button class='btn btn-sm btn-outline-danger' type='submit'>Delete</button>"
+            "<button type='submit' style='background:#dc2626;border-color:#dc2626'>Delete</button>"
             "</form>"
             "</td></tr>"
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='5' class='text-center py-4 text-muted'>No assets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='5' style='text-align:center;color:#64748b'>No assets yet</td></tr>"
 
     form_title = "Edit asset" if is_edit else "Create asset"
     submit_text = "Update asset" if is_edit else "Save asset"
-    cancel_edit = "<a href='/ui/assets' class='btn btn-link text-decoration-none'>Cancel edit</a>" if is_edit else ""
+    cancel_edit = "<a href='/ui/assets' class='btn' style='background:#64748b;border-color:#64748b'>Cancel edit</a>" if is_edit else ""
     id_input_attrs = "readonly" if is_edit else ""
 
     return f"""
@@ -1276,103 +1279,40 @@ def ui_assets(edit_id: str = "") -> str:
       <meta charset='utf-8' />
       <meta name='viewport' content='width=device-width, initial-scale=1' />
       <title>Assets · InfraMind Monitor</title>
-      <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet' />
-      <link rel='preconnect' href='https://fonts.googleapis.com'>
-      <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
-      <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap' rel='stylesheet'>
-      <style>
-        body {{
-          font-family: 'Inter', sans-serif;
-          background: #f8f9fa;
-          color: #212529;
-        }}
-        .hero {{
-          background: linear-gradient(135deg, #0d6efd, #0b5ed7);
-          border-radius: 1rem;
-          color: #fff;
-        }}
-        .section-card {{
-          border: 1px solid #e9ecef;
-          border-radius: 1rem;
-          box-shadow: 0 0.5rem 1rem rgba(0,0,0,.05);
-        }}
-        .asset-link {{
-          font-weight: 600;
-          color: #0d6efd;
-          text-decoration: none;
-        }}
-        .asset-link:hover {{ text-decoration: underline; }}
-      </style>
     </head>
     <body>
-      <main class='container py-4 py-lg-5'>
-        <section class='hero p-4 p-lg-5 mb-4'>
-          <div class='d-flex flex-wrap justify-content-between align-items-end gap-3'>
-            <div>
-              <p class='text-uppercase small mb-2 opacity-75'>Infrastructure UI</p>
-              <h1 class='display-6 fw-bold mb-2'>Assets Management</h1>
-              <p class='mb-0 opacity-75'>Создавайте и редактируйте узлы мониторинга в обновлённом интерфейсе.</p>
-            </div>
-            <div class='d-flex gap-2'>
-              <a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a>
-              <a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a>
-            </div>
-          </div>
+      <main>
+        <section>
+          <h2>{form_title}</h2>
+          <form method='post' action='/ui/assets'>
+            <p><label>ID</label><input name='asset_id' value='{esc(edit_asset.id if edit_asset else '')}' {id_input_attrs} required /></p>
+            <p><label>Name</label><input name='name' value='{esc(edit_asset.name if edit_asset else '')}' required /></p>
+            <p>
+              <label>Type</label>
+              <select name='asset_type'>
+                <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
+                <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
+                <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
+                <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
+              </select>
+            </p>
+            <p><label>Location</label><input name='location' value='{esc(edit_asset.location if edit_asset else '')}' /></p>
+            <p>
+              <button type='submit'>{submit_text}</button>
+              {cancel_edit}
+            </p>
+          </form>
         </section>
 
-        <section class='row g-4'>
-          <div class='col-12 col-xl-4'>
-            <div class='card section-card h-100'>
-              <div class='card-body p-4'>
-                <h2 class='h5 fw-bold mb-3'>{form_title}</h2>
-                <form method='post' action='/ui/assets'>
-                  <div class='mb-3'>
-                    <label class='form-label'>ID</label>
-                    <input class='form-control' name='asset_id' value='{esc(edit_asset.id if edit_asset else '')}' {id_input_attrs} required />
-                  </div>
-                  <div class='mb-3'>
-                    <label class='form-label'>Name</label>
-                    <input class='form-control' name='name' value='{esc(edit_asset.name if edit_asset else '')}' required />
-                  </div>
-                  <div class='mb-3'>
-                    <label class='form-label'>Type</label>
-                    <select class='form-select' name='asset_type'>
-                      <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
-                      <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
-                      <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
-                      <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
-                    </select>
-                  </div>
-                  <div class='mb-4'>
-                    <label class='form-label'>Location</label>
-                    <input class='form-control' name='location' value='{esc(edit_asset.location if edit_asset else '')}' />
-                  </div>
-                  <div class='d-flex align-items-center gap-2'>
-                    <button type='submit' class='btn btn-primary px-4'>{submit_text}</button>
-                    {cancel_edit}
-                  </div>
-                </form>
-              </div>
-            </div>
-          </div>
-          <div class='col-12 col-xl-8'>
-            <div class='card section-card'>
-              <div class='card-body p-4'>
-                <div class='d-flex justify-content-between align-items-center mb-3'>
-                  <h2 class='h5 fw-bold mb-0'>Registered assets</h2>
-                  <span class='badge rounded-pill' style='background:#1abc9c' >{len(assets)} total</span>
-                </div>
-                <div class='table-responsive'>
-                  <table class='table table-hover align-middle mb-0'>
-                    <thead>
-                      <tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr>
-                    </thead>
-                    <tbody>{rows_html}</tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
+        <section>
+          <h2>Registered assets</h2>
+          <p><b>{len(assets)}</b> total assets</p>
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
         </section>
       </main>
     </body>
@@ -1424,7 +1364,7 @@ def ui_asset_detail(asset_id: str) -> str:
     actions = "".join(f"<li>{a}</li>" for a in rec.actions)
 
     return f"""
-    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+    <html><body>
       <h1>Asset detail: {asset.id}</h1>
       <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ui/ai?asset_id={asset.id}'>AI analytics</a></p>
       <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
@@ -1434,7 +1374,7 @@ def ui_asset_detail(asset_id: str) -> str:
       <h2>Correlation insights</h2>
       <ul>{insights_rows}</ul>
       <h2>Recent events</h2>
-      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+      <table>
         <thead><tr><th>Timestamp</th><th>Source</th><th>Severity</th><th>Message</th></tr></thead>
         <tbody>{event_rows}</tbody>
       </table>
