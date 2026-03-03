@@ -149,6 +149,7 @@ _BOOTSTRAP_THEME_HEAD = """
   table { background: #fff; border-collapse: separate; border-spacing: 0; width: 100%; }
   table thead th { background: #f1f3f5; }
   table th, table td { padding: .65rem .75rem; vertical-align: middle; }
+  .hero { background: linear-gradient(135deg, #0d6efd, #0b5ed7); border-radius: 1rem; color: #fff; box-shadow: 0 .75rem 1.25rem rgba(13,110,253,.22); }
 </style>
 """
 
@@ -164,34 +165,37 @@ def _inject_bootstrap_theme(html_text: str) -> str:
 
 
 
-def _inject_bootstrap_shell(html_text: str, current_path: str) -> str:
-    if "global-ui-shell-v1" in html_text:
-        return html_text
-    links = [
-        ("/dashboard", "Dashboard"),
-        ("/ui/assets", "Assets"),
-        ("/ui/events", "Events"),
-        ("/ui/collectors", "Collectors"),
-        ("/ui/ai", "AI analytics"),
-        ("/ui/auth", "Auth"),
-        ("/ui/compliance", "Compliance"),
-    ]
-    nav = "".join(
-        f"<a href='{href}' class='btn btn-sm {'btn-light text-primary' if current_path.startswith(href) else 'btn-outline-light'}'>{label}</a>"
-        for href, label in links
-    )
-    shell = (
-        "<!-- global-ui-shell-v1 -->"
-        "<section class='container' style='margin-top:1.25rem !important'>"
-        "<div style='background:linear-gradient(135deg,#0d6efd,#0b5ed7);border-radius:1rem;padding:1rem 1.1rem;color:#fff;'>"
-        "<div class='d-flex flex-wrap justify-content-between align-items-center gap-2'>"
-        "<div><div style='font-weight:800;letter-spacing:.2px'>InfraMind Monitor</div>"
-        "<div style='opacity:.85;font-size:.92rem'>Unified operations console</div></div>"
-        f"<div class='d-flex flex-wrap gap-2'>{nav}</div>"
-        "</div></div></section>"
-    )
-    return re.sub(r"(<body[^>]*>)", r"\1" + shell, html_text, count=1, flags=re.IGNORECASE)
 
+
+def _inject_bootstrap_page_hero(html_text: str, current_path: str) -> str:
+    if "page-hero-v1" in html_text or "<section class='hero p-4 p-lg-5 mb-4'>" in html_text:
+        return html_text
+
+    labels = {
+        "/": ("Infrastructure UI", "InfraMind Monitor", "Операционная консоль мониторинга и аналитики."),
+        "/dashboard": ("Infrastructure UI", "Dashboard", "Единая панель состояния активов, событий и рисков."),
+        "/ui/auth": ("Infrastructure UI", "Auth Console", "Управление сессиями и проверка контекста доступа."),
+        "/ui/compliance": ("Infrastructure UI", "Compliance Center", "Контроль соответствия и отчётности по безопасности."),
+        "/ui/collectors": ("Infrastructure UI", "Collectors", "Настройка agentless-коллекторов и их параметров."),
+        "/ui/events": ("Infrastructure UI", "Events", "Регистрация и анализ инфраструктурных событий."),
+        "/ui/ai": ("Infrastructure UI", "AI Analytics", "Аномалии, инсайты и рекомендации на основе логов."),
+        "/ui/ai/policies": ("Infrastructure UI", "AI Policy Center", "Управление политиками аналитики и исключениями."),
+        "/ui/csb-merp": ("Infrastructure UI", "CSB MERP Logs", "Импорт и анализ CSB MERP текстовых логов."),
+        "/ui/diagnostics": ("Infrastructure UI", "Diagnostics", "Диагностика worker и служебных подсистем."),
+    }
+    over, title, desc = labels.get(current_path, ("Infrastructure UI", "Console", "Управление мониторингом инфраструктуры."))
+    hero=(
+        "<!-- page-hero-v1 -->"
+        "<section class='hero p-4 p-lg-5 mb-4'>"
+        "<div class='d-flex flex-wrap justify-content-between align-items-end gap-3'>"
+        f"<div><p class='text-uppercase small mb-2 opacity-75'>{over}</p><h1 class='display-6 fw-bold mb-2'>{title}</h1><p class='mb-0 opacity-75'>{desc}</p></div>"
+        "<div class='d-flex gap-2'><a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a><a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a></div>"
+        "</div></section>"
+    )
+
+    if "<main" in html_text:
+        return re.sub(r"(<main[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
+    return re.sub(r"(<body[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -595,8 +599,8 @@ async def bootstrap_theme_middleware(request: Request, call_next):
         body += chunk
     html_text = body.decode("utf-8", errors="ignore")
     themed = _inject_bootstrap_theme(html_text)
-    if request.url.path == "/" or request.url.path == "/dashboard" or request.url.path.startswith("/ui/"):
-        themed = _inject_bootstrap_shell(themed, request.url.path)
+    if request.url.path == "/" or request.url.path == "/dashboard" or (request.url.path.startswith("/ui/") and request.url.path != "/ui/assets"):
+        themed = _inject_bootstrap_page_hero(themed, request.url.path)
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
