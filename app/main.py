@@ -250,6 +250,7 @@ _BOOTSTRAP_THEME_HEAD = """
     color: var(--text) !important;
     padding: .55rem .72rem !important;
     font: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
   }
 
   input:focus, select:focus, textarea:focus {
@@ -297,7 +298,6 @@ _BOOTSTRAP_THEME_HEAD = """
   }
 </style>
 """
-
 
 def _inject_bootstrap_theme(html_text: str) -> str:
     if "human-ui-theme-v1" in html_text:
