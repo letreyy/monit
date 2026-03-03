@@ -5,6 +5,7 @@ import hmac
 import time
 import hashlib
 import base64
+import re
 import html
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -161,6 +162,35 @@ def _inject_bootstrap_theme(html_text: str) -> str:
         return html_text.replace("<html>", f"<html><head>{_BOOTSTRAP_THEME_HEAD}</head>", 1)
     return html_text
 
+
+
+def _inject_bootstrap_shell(html_text: str, current_path: str) -> str:
+    if "global-ui-shell-v1" in html_text:
+        return html_text
+    links = [
+        ("/dashboard", "Dashboard"),
+        ("/ui/assets", "Assets"),
+        ("/ui/events", "Events"),
+        ("/ui/collectors", "Collectors"),
+        ("/ui/ai", "AI analytics"),
+        ("/ui/auth", "Auth"),
+        ("/ui/compliance", "Compliance"),
+    ]
+    nav = "".join(
+        f"<a href='{href}' class='btn btn-sm {'btn-light text-primary' if current_path.startswith(href) else 'btn-outline-light'}'>{label}</a>"
+        for href, label in links
+    )
+    shell = (
+        "<!-- global-ui-shell-v1 -->"
+        "<section class='container' style='margin-top:1.25rem !important'>"
+        "<div style='background:linear-gradient(135deg,#0d6efd,#0b5ed7);border-radius:1rem;padding:1rem 1.1rem;color:#fff;'>"
+        "<div class='d-flex flex-wrap justify-content-between align-items-center gap-2'>"
+        "<div><div style='font-weight:800;letter-spacing:.2px'>InfraMind Monitor</div>"
+        "<div style='opacity:.85;font-size:.92rem'>Unified operations console</div></div>"
+        f"<div class='d-flex flex-wrap gap-2'>{nav}</div>"
+        "</div></div></section>"
+    )
+    return re.sub(r"(<body[^>]*>)", r"\1" + shell, html_text, count=1, flags=re.IGNORECASE)
 
 
 
@@ -565,6 +595,8 @@ async def bootstrap_theme_middleware(request: Request, call_next):
         body += chunk
     html_text = body.decode("utf-8", errors="ignore")
     themed = _inject_bootstrap_theme(html_text)
+    if request.url.path == "/" or request.url.path == "/dashboard" or request.url.path.startswith("/ui/"):
+        themed = _inject_bootstrap_shell(themed, request.url.path)
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
