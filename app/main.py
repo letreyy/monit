@@ -104,20 +104,56 @@ _BOOTSTRAP_THEME_HEAD = """
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-<!-- bootstrap-theme-v1 -->
+<!-- bootstrap-theme-v2 -->
 <style>
-  body { font-family: 'Inter', sans-serif !important; background: #f8f9fa !important; color: #212529 !important; }
+  body, body[style] { font-family: 'Inter', sans-serif !important; background: #f8f9fa !important; color: #212529 !important; }
   body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
-  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
-  .card, form { border-radius: .9rem; }
-  table { background: #fff; }
-  table th { background: #f1f3f5; }
+  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; color: #212529; }
+  a { color: #0d6efd; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  div[style*='background:#fff;border:1px solid #d8dee4'],
+  form[style*='background:#fff;border:1px solid #d8dee4'],
+  table[style*='background:#fff;border:1px solid #d8dee4'] {
+    border: 1px solid #e9ecef !important;
+    border-radius: 1rem !important;
+    box-shadow: 0 0.5rem 1rem rgba(0,0,0,.05) !important;
+    background: #fff !important;
+  }
+
+  form { border-radius: 1rem !important; }
+  form label { display: block; font-weight: 500; margin-bottom: .6rem; }
+  input, select, textarea {
+    border-radius: .65rem !important;
+    border: 1px solid #ced4da !important;
+    padding: .45rem .7rem !important;
+    font: inherit;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: #86b7fe !important;
+    box-shadow: 0 0 0 .2rem rgba(13,110,253,.15) !important;
+    outline: none;
+  }
+
+  button, .btn, button[type='submit'] {
+    border-radius: .65rem !important;
+    font-weight: 600;
+    border: 1px solid #0d6efd;
+    background: #0d6efd;
+    color: #fff;
+    padding: .4rem .8rem;
+  }
+  button:hover, .btn:hover, button[type='submit']:hover { background: #0b5ed7; border-color: #0b5ed7; color: #fff; }
+
+  table { background: #fff; border-collapse: separate; border-spacing: 0; width: 100%; }
+  table thead th { background: #f1f3f5; }
+  table th, table td { padding: .65rem .75rem; vertical-align: middle; }
 </style>
 """
 
 
 def _inject_bootstrap_theme(html_text: str) -> str:
-    if "bootstrap-theme-v1" in html_text:
+    if "bootstrap-theme-v2" in html_text:
         return html_text
     if "</head>" in html_text:
         return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
