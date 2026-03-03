@@ -5,6 +5,7 @@ import hmac
 import time
 import hashlib
 import base64
+import html
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter, deque
@@ -15,7 +16,7 @@ from urllib.error import URLError
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -96,6 +97,37 @@ COMPLIANCE_REPORT_INTERVAL_SEC = int(os.getenv("COMPLIANCE_REPORT_INTERVAL_SEC",
 COMPLIANCE_REPORT_RETENTION = int(os.getenv("COMPLIANCE_REPORT_RETENTION", "100"))
 COMPLIANCE_WEBHOOK_URL = os.getenv("COMPLIANCE_WEBHOOK_URL", "")
 COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
+
+
+_HANDO_THEME_HEAD = """
+<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
+<style>
+  body { font-family: 'Inter', sans-serif !important; background: linear-gradient(180deg, #f7f9fc 0%, #eff3f8 65%, #eef2f6 100%) !important; color: #1d2433 !important; }
+  body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
+  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
+  a { text-decoration: none; }
+  table { background: #fff; border-radius: 14px; overflow: hidden; }
+  table th { background: #f7f9ff; }
+  input, select, textarea { border-radius: .6rem !important; border: 1px solid #d8dee8 !important; padding: .45rem .65rem !important; }
+  button, .btn, button[type='submit'] { border-radius: .65rem !important; }
+  form { background: #fff; border: 1px solid #dbe3ef; border-radius: 14px; padding: 16px; box-shadow: 0 10px 26px rgba(26, 44, 97, .06); }
+</style>
+"""
+
+
+def _inject_hando_theme(html_text: str) -> str:
+    if "bootstrap@5.3.3" in html_text:
+        return html_text
+    if "</head>" in html_text:
+        return html_text.replace("</head>", f"{_HANDO_THEME_HEAD}</head>", 1)
+    if "<html>" in html_text:
+        return html_text.replace("<html>", f"<html><head>{_HANDO_THEME_HEAD}</head>", 1)
+    return html_text
+
+
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -485,6 +517,25 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def hando_theme_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static") or request.url.path.startswith("/docs") or request.url.path.startswith("/redoc") or request.url.path.startswith("/openapi"):
+        return response
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type.lower():
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    html_text = body.decode("utf-8", errors="ignore")
+    themed = _inject_hando_theme(html_text)
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
+
+
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
@@ -958,40 +1009,140 @@ def ui_assets(edit_id: str = "") -> str:
     edit_asset = next((item for item in assets if item.id == edit_id.strip()), None)
     is_edit = edit_asset is not None
 
+    def esc(value: str | None) -> str:
+        return html.escape(value or "", quote=True)
+
     rows = []
     for asset in assets:
+        location_cell = esc(asset.location) if asset.location else "<span class='text-muted'>—</span>"
         rows.append(
-            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td>"
-            f"<td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td><a href='/ui/assets?edit_id={asset.id}'>Edit</a> | <form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0;display:inline'>"
-            f"<button type='submit'>Delete</button></form></td></tr>"
+            "<tr>"
+            f"<td><a class='asset-link' href='/ui/assets/{esc(asset.id)}'>{esc(asset.id)}</a></td>"
+            f"<td>{esc(asset.name)}</td>"
+            f"<td><span class='badge rounded-pill text-bg-light border'>{esc(asset.asset_type.value)}</span></td>"
+            f"<td>{location_cell}</td>"
+            "<td class='d-flex flex-wrap gap-2'>"
+            f"<a class='btn btn-sm btn-outline-primary' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
+            f"<form method='post' action='/ui/assets/{esc(asset.id)}/delete' style='margin:0'>"
+            "<button class='btn btn-sm btn-outline-danger' type='submit'>Delete</button>"
+            "</form>"
+            "</td></tr>"
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='5' class='text-center py-4 text-muted'>No assets yet</td></tr>"
+
+    form_title = "Edit asset" if is_edit else "Create asset"
+    submit_text = "Update asset" if is_edit else "Save asset"
+    cancel_edit = "<a href='/ui/assets' class='btn btn-link text-decoration-none'>Cancel edit</a>" if is_edit else ""
+    id_input_attrs = "readonly" if is_edit else ""
 
     return f"""
-    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
-      <h1>Assets</h1>
-      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/ai'>AI analytics</a></p>
-      <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='asset_id' value='{edit_asset.id if edit_asset else ''}' {'readonly' if is_edit else ''} required /></label><br/><br/>
-        <label>Name <input name='name' value='{edit_asset.name if edit_asset else ''}' required /></label><br/><br/>
-        <label>Type
-          <select name='asset_type'>
-            <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
-            <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
-            <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
-            <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
-          </select>
-        </label><br/><br/>
-        <label>Location <input name='location' value='{edit_asset.location or '' if edit_asset else ''}'/></label><br/><br/>
-        <button type='submit'>{'Update asset' if is_edit else 'Save asset'}</button> {"<a href='/ui/assets' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
-      </form>
-      <h2>Registered assets</h2>
-      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
-        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </body></html>
+    <html>
+    <head>
+      <meta charset='utf-8' />
+      <meta name='viewport' content='width=device-width, initial-scale=1' />
+      <title>Assets · InfraMind Monitor</title>
+      <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet' />
+      <link rel='preconnect' href='https://fonts.googleapis.com'>
+      <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+      <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap' rel='stylesheet'>
+      <style>
+        body {{
+          font-family: 'Inter', sans-serif;
+          background: linear-gradient(180deg, #f7f9fc 0%, #eff3f8 65%, #eef2f6 100%);
+          color: #1d2433;
+        }}
+        .hero {{
+          background: radial-gradient(circle at 10% 10%, #4f7cff, #2440af 65%, #1f327e 100%);
+          border-radius: 1.25rem;
+          color: #fff;
+          box-shadow: 0 20px 40px rgba(31, 50, 126, 0.25);
+        }}
+        .section-card {{
+          border: 0;
+          border-radius: 1rem;
+          box-shadow: 0 16px 40px rgba(15, 30, 66, 0.08);
+        }}
+        .asset-link {{
+          font-weight: 600;
+          color: #1f3da9;
+          text-decoration: none;
+        }}
+        .asset-link:hover {{ text-decoration: underline; }}
+      </style>
+    </head>
+    <body>
+      <main class='container py-4 py-lg-5'>
+        <section class='hero p-4 p-lg-5 mb-4'>
+          <div class='d-flex flex-wrap justify-content-between align-items-end gap-3'>
+            <div>
+              <p class='text-uppercase small mb-2 opacity-75'>Infrastructure UI</p>
+              <h1 class='display-6 fw-bold mb-2'>Assets Management</h1>
+              <p class='mb-0 opacity-75'>Создавайте и редактируйте узлы мониторинга в обновлённом интерфейсе.</p>
+            </div>
+            <div class='d-flex gap-2'>
+              <a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a>
+              <a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a>
+            </div>
+          </div>
+        </section>
+
+        <section class='row g-4'>
+          <div class='col-12 col-xl-4'>
+            <div class='card section-card h-100'>
+              <div class='card-body p-4'>
+                <h2 class='h5 fw-bold mb-3'>{form_title}</h2>
+                <form method='post' action='/ui/assets'>
+                  <div class='mb-3'>
+                    <label class='form-label'>ID</label>
+                    <input class='form-control' name='asset_id' value='{esc(edit_asset.id if edit_asset else '')}' {id_input_attrs} required />
+                  </div>
+                  <div class='mb-3'>
+                    <label class='form-label'>Name</label>
+                    <input class='form-control' name='name' value='{esc(edit_asset.name if edit_asset else '')}' required />
+                  </div>
+                  <div class='mb-3'>
+                    <label class='form-label'>Type</label>
+                    <select class='form-select' name='asset_type'>
+                      <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
+                      <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
+                      <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
+                      <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
+                    </select>
+                  </div>
+                  <div class='mb-4'>
+                    <label class='form-label'>Location</label>
+                    <input class='form-control' name='location' value='{esc(edit_asset.location if edit_asset else '')}' />
+                  </div>
+                  <div class='d-flex align-items-center gap-2'>
+                    <button type='submit' class='btn btn-primary px-4'>{submit_text}</button>
+                    {cancel_edit}
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+          <div class='col-12 col-xl-8'>
+            <div class='card section-card'>
+              <div class='card-body p-4'>
+                <div class='d-flex justify-content-between align-items-center mb-3'>
+                  <h2 class='h5 fw-bold mb-0'>Registered assets</h2>
+                  <span class='badge rounded-pill text-bg-primary'>{len(assets)} total</span>
+                </div>
+                <div class='table-responsive'>
+                  <table class='table table-hover align-middle mb-0'>
+                    <thead>
+                      <tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>{rows_html}</tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </body>
+    </html>
     """
 
 
