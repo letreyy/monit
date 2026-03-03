@@ -142,65 +142,51 @@ _BOOTSTRAP_THEME_HEAD = """
   #human-ui-shell {
     width: 100%;
     margin: 0;
-    padding: .75rem;
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr);
+  }
+
+  .human-topbar {
+    background: #344452;
+    color: #fff;
+    padding: 14px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     gap: 1rem;
-    align-items: start;
+    flex-wrap: wrap;
   }
 
-  .human-sidebar {
-    position: sticky;
-    top: 1rem;
-    background: linear-gradient(180deg, #111827, #1f2937);
-    color: #e5e7eb;
-    border-radius: var(--radius-lg);
-    border: 1px solid rgba(255, 255, 255, .08);
-    box-shadow: 0 18px 35px rgba(15, 23, 42, .25);
-    padding: 1rem;
+  .human-topbar .brand { font-weight: 700; }
+
+  .human-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .45rem;
   }
-
-  .human-brand {
-    margin: 0 0 1rem;
-    padding-bottom: .9rem;
-    border-bottom: 1px solid rgba(255,255,255,.14);
-  }
-
-  .human-brand small { display: block; opacity: .75; text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
-  .human-brand strong { display: block; font-size: 1.05rem; color: #fff; margin-top: .2rem; }
-
-  .human-nav { display: grid; gap: .35rem; }
 
   .human-nav a {
-    display: block;
-    color: #dbeafe;
+    color: #dce6ee;
     text-decoration: none;
-    padding: .56rem .68rem;
-    border-radius: 9px;
-    font-size: .92rem;
-    border: 1px solid transparent;
+    font-size: 14px;
+    padding: .2rem .38rem;
+    border-radius: 6px;
   }
 
   .human-nav a:hover {
-    background: rgba(37, 99, 235, .17);
-    border-color: rgba(147, 197, 253, .32);
+    background: rgba(255,255,255,.12);
     text-decoration: none;
+    color: #fff;
   }
 
   .human-nav a.active {
-    background: linear-gradient(130deg, rgba(37,99,235,.3), rgba(124,58,237,.32));
+    background: rgba(255,255,255,.2);
     color: #fff;
-    border-color: rgba(191, 219, 254, .45);
     font-weight: 600;
   }
 
   .human-content {
+    width: 100%;
     min-width: 0;
-    background: rgba(255,255,255,.75);
-    backdrop-filter: blur(3px);
-    border: 1px solid #e7ecf2;
-    border-radius: var(--radius-lg);
-    padding: 1rem;
+    padding: .9rem;
   }
 
   .human-page-header {
@@ -296,8 +282,8 @@ _BOOTSTRAP_THEME_HEAD = """
   }
 
   @media (max-width: 980px) {
-    #human-ui-shell { grid-template-columns: 1fr; }
-    .human-sidebar { position: static; }
+    .human-topbar { padding: 12px 14px; }
+    .human-content { padding: .6rem; }
   }
 </style>
 """
@@ -317,22 +303,24 @@ def _inject_human_shell(html_text: str, current_path: str) -> str:
         return html_text
 
     routes = [
-        ("/dashboard", "Dashboard"),
-        ("/ui/events", "Events"),
-        ("/ui/assets", "Assets"),
-        ("/ui/collectors", "Collectors"),
-        ("/ui/ai", "AI Analytics"),
-        ("/ui/ai/policies", "AI Policies"),
-        ("/ui/compliance", "Compliance"),
-        ("/ui/auth", "Auth"),
-        ("/ui/csb-merp", "CSB MERP"),
-        ("/ui/diagnostics", "Diagnostics"),
+        ("/dashboard", "Dashboard", ""),
+        ("/ui/events", "Events", ""),
+        ("/ui/assets", "Assets", ""),
+        ("/ui/collectors", "Collectors", "nav-collectors"),
+        ("/ui/ai", "AI Analytics", ""),
+        ("/ui/ai/policies", "AI Policies", ""),
+        ("/ui/compliance", "Compliance", ""),
+        ("/ui/auth", "Auth", ""),
+        ("/ui/csb-merp", "CSB MERP", ""),
+        ("/ui/diagnostics", "Diagnostics", "nav-diagnostics"),
     ]
 
-    nav_links = "".join(
-        f"<a href='{href}' class='{'active' if current_path == href else ''}'>{label}</a>"
-        for href, label in routes
-    )
+    nav_links_parts: list[str] = []
+    for href, label, link_id in routes:
+        active = "active" if current_path == href else ""
+        id_attr = f" id='{link_id}'" if link_id else ""
+        nav_links_parts.append(f"<a{id_attr} href='{href}' class='{active}'>{label}</a>")
+    nav_links = "".join(nav_links_parts)
 
     titles = {
         "/": "Главная",
@@ -351,10 +339,8 @@ def _inject_human_shell(html_text: str, current_path: str) -> str:
 
     body_open = (
         "<div id='human-ui-shell'>"
-        "<aside class='human-sidebar'>"
-        "<div class='human-brand'><small>InfraMind Monitor</small><strong>Панель управления</strong></div>"
-        f"<nav class='human-nav'>{nav_links}</nav>"
-        "</aside>"
+        "<div class='human-topbar'><div class='brand'><b>InfraMind Monitor</b></div>"
+        f"<div class='human-nav'>{nav_links}</div></div>"
         "<section class='human-content'>"
         "<header class='human-page-header'><p class='kicker'>Инфраструктурный мониторинг</p>"
         f"<h1>{page_title}</h1></header>"
