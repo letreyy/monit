@@ -2330,3 +2330,97 @@ def test_compliance_purge_cleans_ai_policy_audit() -> None:
     )
     assert purge.status_code == 200
     assert purge.json()["deleted_ai_policy_audit"] >= 0
+
+
+
+def test_ui_csb_merp_import_and_report(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-ui", "name": "merp-ui", "asset_type": "server", "location": "R2"},
+    )
+
+    log_dir = tmp_path / "logs" / "20260303" / "51101" / "http_10.64.28.23"
+    log_dir.mkdir(parents=True)
+    (log_dir / "ui_session.txt").write_text(
+        "\n".join(
+            [
+                '03.03.2026 10:17:07.638 46192204-001 ID 4635491 Write     SYS+LOGIN;!:L1+903003+2:L2+4824+82+9048+"Татьяна"+"Корниясева":L3+"":L4+20260303+101707+1772522227+-180+0:L5+9999+0',
+                '03.03.2026 10:17:07.778 46192204-001 ID 4649403 Query     SYS+SKRIPT;?:L1+"64_TMC_SPE":L2+"887ABC0FB2CFEFF7D76CEE2DCD27191B":L3+8:L4+0',
+                '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest = client.post(
+        "/ui/csb-merp/ingest",
+        data={
+            "asset_id": "merp-ui",
+            "base_path": str(tmp_path / "logs"),
+            "glob_pattern": "*.txt",
+            "max_files": "5000",
+            "recursive": "on",
+        },
+        follow_redirects=False,
+    )
+    assert ingest.status_code == 303
+    assert "/ui/csb-merp?asset_id=merp-ui" in ingest.headers["location"]
+
+    page = client.get(
+        "/ui/csb-merp",
+        params={
+            "asset_id": "merp-ui",
+            "sscc": "246700022810196136",
+            "script": "",
+            "user": "",
+        },
+    )
+    assert page.status_code == 200
+    assert "CSB MERP log center" in page.text
+    assert "246700022810196136" in page.text
+    assert "DT8580+SSCCDET" in page.text
+
+def test_csb_merp_ingest_and_report_filters(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-01", "name": "merp-01", "asset_type": "server", "location": "R1"},
+    )
+
+    log_dir = tmp_path / "logs" / "20260303" / "51101" / "http_10.64.28.23"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "session.txt"
+    log_file.write_text(
+        "\n".join(
+            [
+                '03.03.2026 10:17:07.638 46192204-001 ID 4635491 Write     SYS+LOGIN;!:L1+903003+2:L2+4824+82+9048+"Татьяна"+"Корниясева":L3+"":L4+20260303+101707+1772522227+-180+0:L5+9999+0',
+                '03.03.2026 10:17:07.778 46192204-001 ID 4649403 Query     SYS+SKRIPT;?:L1+"64_TMC_SPE":L2+"887ABC0FB2CFEFF7D76CEE2DCD27191B":L3+8:L4+0',
+                '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136',
+                '03.03.2026 10:17:08.981 46192204-002 ID 4635491 Write     SYS+ERRINFO;!:L1+4007+2+"Недействительный код строки к модулю. Ошибочные входные данные."+""+"":L2+2+0+0+0+0+""+"KVAR"+" 0000 KVAR"+"SYS+KVAR;?:"+""+"":L3+0',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest_resp = client.post(
+        "/ingest/csb-merp",
+        json={"asset_id": "merp-01", "base_path": str(tmp_path / "logs")},
+    )
+    assert ingest_resp.status_code == 200
+    assert ingest_resp.json()["events_accepted"] == 4
+
+    by_sscc = client.get("/assets/merp-01/csb-merp/report", params={"sscc": "246700022810196136"})
+    assert by_sscc.status_code == 200
+    assert by_sscc.json()["matched_lines"] == 1
+    assert by_sscc.json()["sscc_touched"] == ["246700022810196136"]
+
+    by_script = client.get("/assets/merp-01/csb-merp/report", params={"script": "64_TMC_SPE"})
+    assert by_script.status_code == 200
+    assert by_script.json()["matched_lines"] == 1
+    assert by_script.json()["scripts_touched"] == ["64_TMC_SPE"]
+
+    by_user = client.get("/assets/merp-01/csb-merp/report", params={"user": "4824"})
+    assert by_user.status_code == 200
+    assert by_user.json()["matched_lines"] == 1
+    assert by_user.json()["users_touched"][0].startswith("4824")
+
+
