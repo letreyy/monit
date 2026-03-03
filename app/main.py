@@ -16,7 +16,7 @@ from urllib.error import URLError
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -97,6 +97,37 @@ COMPLIANCE_REPORT_INTERVAL_SEC = int(os.getenv("COMPLIANCE_REPORT_INTERVAL_SEC",
 COMPLIANCE_REPORT_RETENTION = int(os.getenv("COMPLIANCE_REPORT_RETENTION", "100"))
 COMPLIANCE_WEBHOOK_URL = os.getenv("COMPLIANCE_WEBHOOK_URL", "")
 COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
+
+
+_HANDO_THEME_HEAD = """
+<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
+<style>
+  body { font-family: 'Inter', sans-serif !important; background: linear-gradient(180deg, #f7f9fc 0%, #eff3f8 65%, #eef2f6 100%) !important; color: #1d2433 !important; }
+  body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
+  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
+  a { text-decoration: none; }
+  table { background: #fff; border-radius: 14px; overflow: hidden; }
+  table th { background: #f7f9ff; }
+  input, select, textarea { border-radius: .6rem !important; border: 1px solid #d8dee8 !important; padding: .45rem .65rem !important; }
+  button, .btn, button[type='submit'] { border-radius: .65rem !important; }
+  form { background: #fff; border: 1px solid #dbe3ef; border-radius: 14px; padding: 16px; box-shadow: 0 10px 26px rgba(26, 44, 97, .06); }
+</style>
+"""
+
+
+def _inject_hando_theme(html_text: str) -> str:
+    if "bootstrap@5.3.3" in html_text:
+        return html_text
+    if "</head>" in html_text:
+        return html_text.replace("</head>", f"{_HANDO_THEME_HEAD}</head>", 1)
+    if "<html>" in html_text:
+        return html_text.replace("<html>", f"<html><head>{_HANDO_THEME_HEAD}</head>", 1)
+    return html_text
+
+
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -486,6 +517,25 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def hando_theme_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static") or request.url.path.startswith("/docs") or request.url.path.startswith("/redoc") or request.url.path.startswith("/openapi"):
+        return response
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type.lower():
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    html_text = body.decode("utf-8", errors="ignore")
+    themed = _inject_hando_theme(html_text)
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
+
+
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
