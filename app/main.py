@@ -104,106 +104,173 @@ _BOOTSTRAP_THEME_HEAD = """
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-<!-- clean-ui-theme-v2 -->
+<!-- human-ui-theme-v1 -->
 <style>
   :root {
-    --bg: #f4f6f8;
+    --bg: #f3f5f9;
     --surface: #ffffff;
-    --text: #1f2937;
-    --muted: #6b7280;
-    --line: #e5e7eb;
-    --primary: #2563eb;
-    --primary-hover: #1d4ed8;
-    --radius: 14px;
+    --surface-soft: #f8fafc;
+    --text: #0f172a;
+    --muted: #475569;
+    --line: #dde3ea;
+    --accent: #2563eb;
+    --accent-2: #7c3aed;
+    --ok: #059669;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 10px;
   }
+
+  * { box-sizing: border-box; }
 
   body, body[style] {
+    margin: 0 !important;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-    background: var(--bg) !important;
     color: var(--text) !important;
-    margin: 0;
+    background:
+      radial-gradient(circle at top right, rgba(37, 99, 235, .08), transparent 35%),
+      radial-gradient(circle at left -10%, rgba(124, 58, 237, .07), transparent 38%),
+      var(--bg) !important;
+    min-height: 100vh;
+    line-height: 1.45;
   }
 
-  body > .container, body > div.wrap, body > div, body > main {
-    max-width: min(1240px, 96vw) !important;
-    margin: 1.75rem auto !important;
+  #human-ui-shell {
+    width: min(1400px, 98vw);
+    margin: 1rem auto;
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
   }
 
-  h1, h2, h3, h4 {
-    color: #111827;
-    letter-spacing: -0.015em;
-    margin-top: 0;
+  .human-sidebar {
+    position: sticky;
+    top: 1rem;
+    background: linear-gradient(180deg, #111827, #1f2937);
+    color: #e5e7eb;
+    border-radius: var(--radius-lg);
+    border: 1px solid rgba(255, 255, 255, .08);
+    box-shadow: 0 18px 35px rgba(15, 23, 42, .25);
+    padding: 1rem;
   }
 
-  p, li, td, th, label, span {
-    color: inherit;
+  .human-brand {
+    margin: 0 0 1rem;
+    padding-bottom: .9rem;
+    border-bottom: 1px solid rgba(255,255,255,.14);
   }
 
-  a {
-    color: var(--primary);
+  .human-brand small { display: block; opacity: .75; text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
+  .human-brand strong { display: block; font-size: 1.05rem; color: #fff; margin-top: .2rem; }
+
+  .human-nav { display: grid; gap: .35rem; }
+
+  .human-nav a {
+    display: block;
+    color: #dbeafe;
+    text-decoration: none;
+    padding: .56rem .68rem;
+    border-radius: 9px;
+    font-size: .92rem;
+    border: 1px solid transparent;
+  }
+
+  .human-nav a:hover {
+    background: rgba(37, 99, 235, .17);
+    border-color: rgba(147, 197, 253, .32);
     text-decoration: none;
   }
 
-  a:hover {
-    color: var(--primary-hover);
-    text-decoration: underline;
-  }
-
-  div[style*='background:#fff;border:1px solid #d8dee4'],
-  form[style*='background:#fff;border:1px solid #d8dee4'],
-  table[style*='background:#fff;border:1px solid #d8dee4'] {
-    border: 1px solid var(--line) !important;
-    border-radius: var(--radius) !important;
-    background: var(--surface) !important;
-    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06) !important;
-  }
-
-  form {
-    border-radius: var(--radius) !important;
-    border: 1px solid var(--line);
-    background: var(--surface);
-  }
-
-  form label {
-    display: block;
-    font-size: .92rem;
+  .human-nav a.active {
+    background: linear-gradient(130deg, rgba(37,99,235,.3), rgba(124,58,237,.32));
+    color: #fff;
+    border-color: rgba(191, 219, 254, .45);
     font-weight: 600;
-    margin-bottom: .45rem;
   }
+
+  .human-content {
+    min-width: 0;
+    background: rgba(255,255,255,.75);
+    backdrop-filter: blur(3px);
+    border: 1px solid #e7ecf2;
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+  }
+
+  .human-page-header {
+    border-radius: 14px;
+    color: #fff;
+    padding: 1.15rem 1.2rem;
+    background: linear-gradient(120deg, #1e293b, #334155 55%, #475569);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .26);
+    margin-bottom: 1rem;
+  }
+
+  .human-page-header .kicker { margin: 0 0 .32rem; opacity: .8; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+  .human-page-header h1 { margin: 0; color: #fff; font-size: clamp(1.3rem, 2.4vw, 1.9rem); }
+
+  .human-page-body > .container,
+  .human-page-body > div.wrap,
+  .human-page-body > div,
+  .human-page-body > main {
+    max-width: 100% !important;
+    margin: 0 0 .9rem !important;
+  }
+
+  h1, h2, h3, h4 { color: #0b1220; letter-spacing: -.01em; }
+  p, li, td, th, label, span { color: inherit; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: #1d4ed8; text-decoration: underline; }
+
+  .human-page-body > *,
+  div[style*='background:#fff;border:1px solid #d8dee4'],
+  form,
+  table,
+  pre,
+  .card {
+    border: 1px solid var(--line) !important;
+    background: var(--surface) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+  }
+
+  .human-page-body > * { padding: .95rem; }
+
+  form { padding: 1rem !important; }
+  label { font-size: .9rem; font-weight: 600; color: #1e293b; }
 
   input, select, textarea {
-    width: 100%;
-    max-width: 100%;
-    border-radius: 10px !important;
-    border: 1px solid #cfd5df !important;
-    background: #fff;
-    color: var(--text);
+    border: 1px solid #cfd8e3 !important;
+    border-radius: var(--radius-sm) !important;
+    background: #fff !important;
+    color: var(--text) !important;
     padding: .55rem .72rem !important;
     font: inherit;
     transition: border-color .15s ease, box-shadow .15s ease;
   }
 
   input:focus, select:focus, textarea:focus {
-    border-color: var(--primary) !important;
-    box-shadow: 0 0 0 .2rem rgba(37, 99, 235, .14) !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 .2rem rgba(37,99,235,.16) !important;
     outline: none;
   }
 
   button, .btn, button[type='submit'] {
     border-radius: 10px !important;
-    border: 1px solid var(--primary);
-    background: var(--primary);
-    color: #fff;
+    border: 1px solid var(--accent) !important;
+    background: linear-gradient(130deg, var(--accent), #1d4ed8) !important;
+    color: #fff !important;
+    padding: .48rem .86rem !important;
     font-weight: 600;
-    padding: .5rem .85rem;
-    line-height: 1.2;
   }
 
   button:hover, .btn:hover, button[type='submit']:hover {
-    border-color: var(--primary-hover);
-    background: var(--primary-hover);
-    color: #fff;
-    text-decoration: none;
+    background: linear-gradient(130deg, #1d4ed8, #1e40af) !important;
+    text-decoration: none !important;
   }
 
   table {
@@ -211,43 +278,29 @@ _BOOTSTRAP_THEME_HEAD = """
     border-collapse: separate;
     border-spacing: 0;
     overflow: hidden;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 12px;
   }
 
   table thead th {
-    background: #f8fafc;
-    color: #374151;
+    background: var(--surface-soft);
+    color: #334155;
     font-weight: 700;
   }
 
   table th, table td {
-    padding: .65rem .75rem;
+    padding: .65rem .72rem;
     border-bottom: 1px solid #eef2f7;
     vertical-align: middle;
   }
 
-  .page-hero {
-    border-radius: var(--radius);
-    background: linear-gradient(110deg, #1f2937, #334155);
-    color: #fff;
-    padding: 1.4rem 1.5rem;
-    margin-bottom: 1rem;
-    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.2);
+  @media (max-width: 980px) {
+    #human-ui-shell { grid-template-columns: 1fr; }
+    .human-sidebar { position: static; }
   }
-
-  .page-hero-kicker { margin: 0 0 .35rem; opacity: .78; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
-  .page-hero-title { margin: 0 0 .35rem; color: #fff; font-size: clamp(1.45rem, 3.2vw, 2rem); }
-  .page-hero-desc { margin: 0; color: rgba(255,255,255,.86); }
-  .page-hero-actions { margin-top: .9rem; display: flex; gap: .55rem; flex-wrap: wrap; }
-  .page-hero-actions .btn-muted { background: rgba(255,255,255,.2) !important; border-color: rgba(255,255,255,.35) !important; }
-  .page-hero-actions .btn-muted:hover { background: rgba(255,255,255,.3) !important; border-color: rgba(255,255,255,.45) !important; }
 </style>
 """
 
 def _inject_bootstrap_theme(html_text: str) -> str:
-    if "clean-ui-theme-v2" in html_text:
+    if "human-ui-theme-v1" in html_text:
         return html_text
     if "</head>" in html_text:
         return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
@@ -256,37 +309,59 @@ def _inject_bootstrap_theme(html_text: str) -> str:
     return html_text
 
 
-
-
-
-def _inject_bootstrap_page_hero(html_text: str, current_path: str) -> str:
-    if "page-hero-v3" in html_text or "<section class='page-hero'>" in html_text:
+def _inject_human_shell(html_text: str, current_path: str) -> str:
+    if "id='human-ui-shell'" in html_text:
         return html_text
 
-    labels = {
-        "/": ("Infrastructure UI", "InfraMind Monitor", "Операционная консоль мониторинга и аналитики."),
-        "/dashboard": ("Infrastructure UI", "Dashboard", "Единая панель состояния активов, событий и рисков."),
-        "/ui/auth": ("Infrastructure UI", "Auth Console", "Управление сессиями и проверка контекста доступа."),
-        "/ui/compliance": ("Infrastructure UI", "Compliance Center", "Контроль соответствия и отчётности по безопасности."),
-        "/ui/collectors": ("Infrastructure UI", "Collectors", "Настройка agentless-коллекторов и их параметров."),
-        "/ui/events": ("Infrastructure UI", "Events", "Регистрация и анализ инфраструктурных событий."),
-        "/ui/ai": ("Infrastructure UI", "AI Analytics", "Аномалии, инсайты и рекомендации на основе логов."),
-        "/ui/ai/policies": ("Infrastructure UI", "AI Policy Center", "Управление политиками аналитики и исключениями."),
-        "/ui/csb-merp": ("Infrastructure UI", "CSB MERP Logs", "Импорт и анализ CSB MERP текстовых логов."),
-        "/ui/diagnostics": ("Infrastructure UI", "Diagnostics", "Диагностика worker и служебных подсистем."),
-    }
-    over, title, desc = labels.get(current_path, ("Infrastructure UI", "Console", "Управление мониторингом инфраструктуры."))
-    hero=(
-        "<!-- page-hero-v3 -->"
-        "<section class='page-hero'>"
-        f"<p class='page-hero-kicker'>{over}</p><h1 class='page-hero-title'>{title}</h1><p class='page-hero-desc'>{desc}</p>"
-        "<div class='page-hero-actions'><a href='/dashboard' class='btn'>← Dashboard</a><a href='/ui/ai' class='btn btn-muted'>AI analytics</a></div>"
-        "</section>"
+    routes = [
+        ("/dashboard", "Dashboard"),
+        ("/ui/events", "Events"),
+        ("/ui/assets", "Assets"),
+        ("/ui/collectors", "Collectors"),
+        ("/ui/ai", "AI Analytics"),
+        ("/ui/ai/policies", "AI Policies"),
+        ("/ui/compliance", "Compliance"),
+        ("/ui/auth", "Auth"),
+        ("/ui/csb-merp", "CSB MERP"),
+        ("/ui/diagnostics", "Diagnostics"),
+    ]
+
+    nav_links = "".join(
+        f"<a href='{href}' class='{'active' if current_path == href else ''}'>{label}</a>"
+        for href, label in routes
     )
 
-    if "<main" in html_text:
-        return re.sub(r"(<main[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
-    return re.sub(r"(<body[^>]*>)", r"\1" + hero, html_text, count=1, flags=re.IGNORECASE)
+    titles = {
+        "/": "Главная",
+        "/dashboard": "Dashboard",
+        "/ui/events": "События",
+        "/ui/assets": "Активы",
+        "/ui/collectors": "Коллекторы",
+        "/ui/ai": "AI аналитика",
+        "/ui/ai/policies": "Политики AI",
+        "/ui/compliance": "Соответствие",
+        "/ui/auth": "Доступ",
+        "/ui/csb-merp": "CSB MERP",
+        "/ui/diagnostics": "Диагностика",
+    }
+    page_title = titles.get(current_path, "Мониторинг")
+
+    body_open = (
+        "<div id='human-ui-shell'>"
+        "<aside class='human-sidebar'>"
+        "<div class='human-brand'><small>InfraMind Monitor</small><strong>Панель управления</strong></div>"
+        f"<nav class='human-nav'>{nav_links}</nav>"
+        "</aside>"
+        "<section class='human-content'>"
+        "<header class='human-page-header'><p class='kicker'>Инфраструктурный мониторинг</p>"
+        f"<h1>{page_title}</h1></header>"
+        "<div class='human-page-body'>"
+    )
+    body_close = "</div></section></div>"
+
+    html_text = re.sub(r"(<body[^>]*>)", r"\1" + body_open, html_text, count=1, flags=re.IGNORECASE)
+    html_text = re.sub(r"</body>", body_close + "</body>", html_text, count=1, flags=re.IGNORECASE)
+    return html_text
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -690,8 +765,7 @@ async def bootstrap_theme_middleware(request: Request, call_next):
         body += chunk
     html_text = body.decode("utf-8", errors="ignore")
     themed = _inject_bootstrap_theme(html_text)
-    if request.url.path == "/" or request.url.path == "/dashboard" or (request.url.path.startswith("/ui/") and request.url.path != "/ui/assets"):
-        themed = _inject_bootstrap_page_hero(themed, request.url.path)
+    themed = _inject_human_shell(themed, request.url.path)
     headers = dict(response.headers)
     headers.pop("content-length", None)
     return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
