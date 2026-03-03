@@ -847,7 +847,7 @@ def ui_collectors(edit_id: str = "") -> str:
 
         <div data-collector-scope='csb_merp_share' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
           <b>CSB MERP share settings</b><br/><br/>
-          <label>Share path (mounted on API host) <input name='csb_share_path' value='{form_csb_share_path}' placeholder='/mnt/merp_logs/logs/20260303' style='min-width:360px' /></label><br/><br/>
+          <label>Share path (mounted path or UNC like //10.10.10.10/merp/logs) <input name='csb_share_path' value='{form_csb_share_path}' placeholder='/mnt/merp_logs/logs/20260303 or //10.10.10.10/merp/logs' style='min-width:360px' /></label><br/><br/>
           <label>Glob pattern <input name='csb_glob_pattern' value='{form_csb_glob_pattern}' /></label><br/><br/>
           <label>Max files per poll <input name='csb_max_files' type='number' value='{form_csb_max_files}' min='1' max='50000' /></label><br/><br/>
           <label>Event source <input name='csb_source' value='{form_csb_source}' /></label><br/><br/>
@@ -1677,27 +1677,82 @@ def ui_events_submit(
     return RedirectResponse(url=f"/ui/assets/{asset_id}", status_code=303)
 
 
-def _ingest_csb_merp_from_path(asset_id: str, base_path: str, recursive: bool = True, glob_pattern: str = "*.txt", max_files: int = 5000) -> CsbMerpIngestSummary:
-    files = iter_log_files(base_path, recursive=recursive, glob_pattern=glob_pattern)
-    files_found = len(files)
-    files = files[:max(1, max_files)]
+def _ingest_csb_merp_from_path(
+    asset_id: str,
+    base_path: str,
+    recursive: bool = True,
+    glob_pattern: str = "*.txt",
+    max_files: int = 5000,
+    smb_username: str | None = None,
+    smb_password: str | None = None,
+) -> CsbMerpIngestSummary:
+    is_unc = base_path.strip().startswith("//") or base_path.strip().startswith("\\")
 
     lines_seen = 0
     lines_parsed = 0
     accepted = 0
 
-    for file_path in files:
-        for line in file_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if not line.strip():
-                continue
-            lines_seen += 1
-            event = line_to_event(asset_id, line)
-            if event is None:
-                continue
-            lines_parsed += 1
-            _stored, is_new = service.register_event(event)
-            if is_new:
-                accepted += 1
+    if is_unc:
+        try:
+            import fnmatch
+            import smbclient  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("smbclient/smbprotocol is not installed") from exc
+
+        share_path = base_path.strip().replace("/", "\\")
+        if not share_path.startswith("\\"):
+            share_path = "\\" + share_path.lstrip("\\")
+        parts = [p for p in share_path.split("\\") if p]
+        if len(parts) < 2:
+            raise RuntimeError(f"invalid UNC path: {base_path}")
+        server = parts[0]
+        smbclient.register_session(server, username=smb_username or None, password=smb_password or None)
+
+        files: list[str] = []
+        if recursive:
+            for root, _dirs, names in smbclient.walk(share_path):
+                for name in names:
+                    if fnmatch.fnmatch(name, glob_pattern):
+                        files.append(root.rstrip("\\") + "\\" + name)
+        else:
+            for entry in smbclient.scandir(share_path):
+                if entry.is_file() and fnmatch.fnmatch(entry.name, glob_pattern):
+                    files.append(share_path.rstrip("\\") + "\\" + entry.name)
+
+        files_found = len(files)
+        files = sorted(files)[:max(1, max_files)]
+
+        for file_path in files:
+            with smbclient.open_file(file_path, mode="rb") as fh:
+                text = fh.read().decode("utf-8", errors="ignore")
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                lines_seen += 1
+                event = line_to_event(asset_id, line)
+                if event is None:
+                    continue
+                lines_parsed += 1
+                _stored, is_new = service.register_event(event)
+                if is_new:
+                    accepted += 1
+    else:
+        files = iter_log_files(base_path, recursive=recursive, glob_pattern=glob_pattern)
+        files_found = len(files)
+        files = files[:max(1, max_files)]
+
+        for file_path in files:
+            for line in file_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line.strip():
+                    continue
+                lines_seen += 1
+                event = line_to_event(asset_id, line)
+                if event is None:
+                    continue
+                lines_parsed += 1
+                _stored, is_new = service.register_event(event)
+                if is_new:
+                    accepted += 1
 
     return CsbMerpIngestSummary(
         asset_id=asset_id,
@@ -1843,10 +1898,12 @@ def ui_csb_merp(
       <form method='post' action='/ui/csb-merp/ingest' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:12px'>
         <h3 style='margin-top:0'>1) Import txt logs from mounted share</h3>
         <label>Asset <select name='asset_id' required><option value=''>select...</option>{options}</select></label>
-        <label style='margin-left:10px'>Base path <input name='base_path' value='{base_path}' placeholder='/mnt/merp_logs/logs/20260303' style='min-width:380px' required /></label>
+        <label style='margin-left:10px'>Base path <input name='base_path' value='{base_path}' placeholder='/mnt/merp_logs/logs/20260303 or //10.10.10.10/merp/logs' style='min-width:380px' required /></label>
         <label style='margin-left:10px'>Glob <input name='glob_pattern' value='{glob_pattern}'/></label>
         <label style='margin-left:10px'>Max files <input type='number' name='max_files' value='{max_files}' min='1' max='50000'/></label>
-        <label style='margin-left:10px'><input type='checkbox' name='recursive' {'checked' if recursive else ''}/> recursive</label>
+        <label style='margin-left:10px'><input type='checkbox' name='recursive' {'checked' if recursive else ''}/> recursive</label><br/><br/>
+        <label>SMB username (for //server/share) <input name='smb_username' value='' placeholder='DOMAIN\\user or user' /></label>
+        <label style='margin-left:10px'>SMB password <input type='password' name='smb_password' value='' /></label>
         <button type='submit' style='margin-left:10px'>Import</button>
       </form>
 
@@ -1878,16 +1935,23 @@ def ui_csb_merp_ingest(
     glob_pattern: str = Form("*.txt"),
     max_files: int = Form(5000),
     recursive: str | None = Form(None),
+    smb_username: str = Form(""),
+    smb_password: str = Form(""),
 ) -> RedirectResponse:
     if not _asset_exists(asset_id):
         return RedirectResponse(url="/ui/csb-merp?msg=Asset+not+found", status_code=303)
-    summary = _ingest_csb_merp_from_path(
-        asset_id=asset_id,
-        base_path=base_path.strip(),
-        recursive=bool(recursive),
-        glob_pattern=glob_pattern.strip() or "*.txt",
-        max_files=max(1, min(max_files, 50000)),
-    )
+    try:
+        summary = _ingest_csb_merp_from_path(
+            asset_id=asset_id,
+            base_path=base_path.strip(),
+            recursive=bool(recursive),
+            glob_pattern=glob_pattern.strip() or "*.txt",
+            max_files=max(1, min(max_files, 50000)),
+            smb_username=smb_username.strip() or None,
+            smb_password=smb_password or None,
+        )
+    except RuntimeError as exc:
+        return RedirectResponse(url=f"/ui/csb-merp?asset_id={asset_id}&base_path={base_path}&msg={str(exc)}", status_code=303)
     msg = f"Imported: accepted={summary.events_accepted}, parsed={summary.lines_parsed}, files={summary.files_processed}/{summary.files_found}"
     base = f"/ui/csb-merp?asset_id={asset_id}&base_path={base_path}&glob_pattern={glob_pattern}&max_files={max_files}&msg={msg}"
     if recursive:
@@ -3008,13 +3072,18 @@ def register_events_batch(request: Request, batch: EventBatch, _role: str = Depe
 def ingest_csb_merp_logs(request: Request, payload: CsbMerpIngestRequest, _role: str = Depends(_require_operator_dependency)) -> CsbMerpIngestSummary:
     if not _asset_exists(payload.asset_id):
         raise HTTPException(status_code=404, detail="Asset not found")
-    return _ingest_csb_merp_from_path(
-        asset_id=payload.asset_id,
-        base_path=payload.base_path,
-        recursive=payload.recursive,
-        glob_pattern=payload.glob_pattern,
-        max_files=payload.max_files,
-    )
+    try:
+        return _ingest_csb_merp_from_path(
+            asset_id=payload.asset_id,
+            base_path=payload.base_path,
+            recursive=payload.recursive,
+            glob_pattern=payload.glob_pattern,
+            max_files=payload.max_files,
+            smb_username=payload.smb_username,
+            smb_password=payload.smb_password,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/assets/{asset_id}/csb-merp/report", response_model=CsbMerpReport)

@@ -337,6 +337,8 @@ class CsbMerpIngestRequest(BaseModel):
     recursive: bool = True
     glob_pattern: str = "*.txt"
     max_files: int = Field(5000, ge=1, le=50000)
+    smb_username: str | None = None
+    smb_password: str | None = None
 
 
 class CsbMerpIngestSummary(BaseModel):

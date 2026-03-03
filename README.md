@@ -201,7 +201,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8050 --reload
 Для агентов добавлен batch endpoint:
 
 - `POST /ingest/events`
-- `POST /ingest/csb-merp` (импорт txt-логов CSB MERP из локальной/смонтированной папки, например SMB/Windows share)
+- `POST /ingest/csb-merp` (импорт txt-логов CSB MERP из локальной папки, смонтированной шары или напрямую по UNC-пути (`//server/share/...`))
 - `GET /assets/{asset_id}/csb-merp/report` (поиск и цепочка по `sscc`, `script`, `user`, включая ошибки `SYS+ERRINFO`)
 
 Формат payload:

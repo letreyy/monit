@@ -315,7 +315,7 @@ curl -sS -X POST http://127.0.0.1:8050/collectors \
 
 Для сценариев вида `\\logs\\20260303\\51101\\http_10.64.28.23\\*.txt`:
 
-1. Смонтируйте Windows-шару в ОС, где запущен API (например, в Linux через CIFS в `/mnt/merp_logs`).
+1. Используйте либо смонтированную Windows-шару (например, `/mnt/merp_logs`), либо прямой UNC-путь вида `//10.10.10.10/merp/logs`.
 2. Создайте/используйте asset (например, `merp-01`).
 3. Импортируйте логи:
 
@@ -324,7 +324,9 @@ curl -X POST http://127.0.0.1:8050/ingest/csb-merp \
   -H "Content-Type: application/json" \
   -d '{
     "asset_id":"merp-01",
-    "base_path":"/mnt/merp_logs/logs/20260303",
+    "base_path":"//10.10.10.10/merp/logs/20260303",
+    "smb_username":"DOMAIN\\user",
+    "smb_password":"secret",
     "recursive": true,
     "glob_pattern":"*.txt"
   }'
@@ -353,7 +355,7 @@ curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?user=4824"
 
 Теперь можно не только вручную импортировать, но и включить **периодический сбор** через worker:
 
-1. Смонтируйте сетевую шару на хосте API (например `/mnt/merp_logs`).
+1. Укажите либо смонтированный путь, либо прямой UNC путь `//server/share/...`.
 2. Создайте collector target типа `csb_merp_share` (`/ui/collectors` или `POST /collectors`) и укажите:
    - `csb_share_path` — путь к смонтированной папке,
    - `csb_glob_pattern` — маска файлов (обычно `*.txt`),
