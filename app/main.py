@@ -101,61 +101,153 @@ COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
 
 
 _BOOTSTRAP_THEME_HEAD = """
-<link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css' rel='stylesheet'>
 <link rel='preconnect' href='https://fonts.googleapis.com'>
 <link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
 <link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
-<!-- bootstrap-theme-v2 -->
+<!-- clean-ui-theme-v2 -->
 <style>
-  body, body[style] { font-family: 'Inter', sans-serif !important; background: #f8f9fa !important; color: #212529 !important; }
-  body > .container, body > div.wrap, body > div, body > main { max-width: min(1240px, 95vw) !important; margin: 2rem auto !important; }
-  h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; color: #212529; }
-  a { color: #0d6efd; text-decoration: none; }
-  a:hover { text-decoration: underline; }
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --radius: 14px;
+  }
+
+  body, body[style] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    margin: 0;
+  }
+
+  body > .container, body > div.wrap, body > div, body > main {
+    max-width: min(1240px, 96vw) !important;
+    margin: 1.75rem auto !important;
+  }
+
+  h1, h2, h3, h4 {
+    color: #111827;
+    letter-spacing: -0.015em;
+    margin-top: 0;
+  }
+
+  p, li, td, th, label, span {
+    color: inherit;
+  }
+
+  a {
+    color: var(--primary);
+    text-decoration: none;
+  }
+
+  a:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+  }
 
   div[style*='background:#fff;border:1px solid #d8dee4'],
   form[style*='background:#fff;border:1px solid #d8dee4'],
   table[style*='background:#fff;border:1px solid #d8dee4'] {
-    border: 1px solid #e9ecef !important;
-    border-radius: 1rem !important;
-    box-shadow: 0 0.5rem 1rem rgba(0,0,0,.05) !important;
-    background: #fff !important;
+    border: 1px solid var(--line) !important;
+    border-radius: var(--radius) !important;
+    background: var(--surface) !important;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06) !important;
   }
 
-  form { border-radius: 1rem !important; }
-  form label { display: block; font-weight: 500; margin-bottom: .6rem; }
-  input, select, textarea {
-    border-radius: .65rem !important;
-    border: 1px solid #ced4da !important;
-    padding: .45rem .7rem !important;
-    font: inherit;
+  form {
+    border-radius: var(--radius) !important;
+    border: 1px solid var(--line);
+    background: var(--surface);
   }
+
+  form label {
+    display: block;
+    font-size: .92rem;
+    font-weight: 600;
+    margin-bottom: .45rem;
+  }
+
+  input, select, textarea {
+    width: 100%;
+    max-width: 100%;
+    border-radius: 10px !important;
+    border: 1px solid #cfd5df !important;
+    background: #fff;
+    color: var(--text);
+    padding: .55rem .72rem !important;
+    font: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+
   input:focus, select:focus, textarea:focus {
-    border-color: #86b7fe !important;
-    box-shadow: 0 0 0 .2rem rgba(13,110,253,.15) !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 .2rem rgba(37, 99, 235, .14) !important;
     outline: none;
   }
 
   button, .btn, button[type='submit'] {
-    border-radius: .65rem !important;
-    font-weight: 600;
-    border: 1px solid #0d6efd;
-    background: #0d6efd;
+    border-radius: 10px !important;
+    border: 1px solid var(--primary);
+    background: var(--primary);
     color: #fff;
-    padding: .4rem .8rem;
+    font-weight: 600;
+    padding: .5rem .85rem;
+    line-height: 1.2;
   }
-  button:hover, .btn:hover, button[type='submit']:hover { background: #0b5ed7; border-color: #0b5ed7; color: #fff; }
 
-  table { background: #fff; border-collapse: separate; border-spacing: 0; width: 100%; }
-  table thead th { background: #f1f3f5; }
-  table th, table td { padding: .65rem .75rem; vertical-align: middle; }
-  .hero { background: linear-gradient(135deg, #0d6efd, #0b5ed7); border-radius: 1rem; color: #fff; box-shadow: 0 .75rem 1.25rem rgba(13,110,253,.22); }
+  button:hover, .btn:hover, button[type='submit']:hover {
+    border-color: var(--primary-hover);
+    background: var(--primary-hover);
+    color: #fff;
+    text-decoration: none;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+
+  table thead th {
+    background: #f8fafc;
+    color: #374151;
+    font-weight: 700;
+  }
+
+  table th, table td {
+    padding: .65rem .75rem;
+    border-bottom: 1px solid #eef2f7;
+    vertical-align: middle;
+  }
+
+  .page-hero {
+    border-radius: var(--radius);
+    background: linear-gradient(110deg, #1f2937, #334155);
+    color: #fff;
+    padding: 1.4rem 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 14px 30px rgba(15, 23, 42, 0.2);
+  }
+
+  .page-hero-kicker { margin: 0 0 .35rem; opacity: .78; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; }
+  .page-hero-title { margin: 0 0 .35rem; color: #fff; font-size: clamp(1.45rem, 3.2vw, 2rem); }
+  .page-hero-desc { margin: 0; color: rgba(255,255,255,.86); }
+  .page-hero-actions { margin-top: .9rem; display: flex; gap: .55rem; flex-wrap: wrap; }
+  .page-hero-actions .btn-muted { background: rgba(255,255,255,.2) !important; border-color: rgba(255,255,255,.35) !important; }
+  .page-hero-actions .btn-muted:hover { background: rgba(255,255,255,.3) !important; border-color: rgba(255,255,255,.45) !important; }
 </style>
 """
 
-
 def _inject_bootstrap_theme(html_text: str) -> str:
-    if "bootstrap-theme-v2" in html_text:
+    if "clean-ui-theme-v2" in html_text:
         return html_text
     if "</head>" in html_text:
         return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
@@ -168,7 +260,7 @@ def _inject_bootstrap_theme(html_text: str) -> str:
 
 
 def _inject_bootstrap_page_hero(html_text: str, current_path: str) -> str:
-    if "page-hero-v1" in html_text or "<section class='hero p-4 p-lg-5 mb-4'>" in html_text:
+    if "page-hero-v3" in html_text or "<section class='page-hero'>" in html_text:
         return html_text
 
     labels = {
@@ -185,12 +277,11 @@ def _inject_bootstrap_page_hero(html_text: str, current_path: str) -> str:
     }
     over, title, desc = labels.get(current_path, ("Infrastructure UI", "Console", "Управление мониторингом инфраструктуры."))
     hero=(
-        "<!-- page-hero-v1 -->"
-        "<section class='hero p-4 p-lg-5 mb-4'>"
-        "<div class='d-flex flex-wrap justify-content-between align-items-end gap-3'>"
-        f"<div><p class='text-uppercase small mb-2 opacity-75'>{over}</p><h1 class='display-6 fw-bold mb-2'>{title}</h1><p class='mb-0 opacity-75'>{desc}</p></div>"
-        "<div class='d-flex gap-2'><a href='/dashboard' class='btn btn-light btn-sm px-3'>← Dashboard</a><a href='/ui/ai' class='btn btn-outline-light btn-sm px-3'>AI analytics</a></div>"
-        "</div></section>"
+        "<!-- page-hero-v3 -->"
+        "<section class='page-hero'>"
+        f"<p class='page-hero-kicker'>{over}</p><h1 class='page-hero-title'>{title}</h1><p class='page-hero-desc'>{desc}</p>"
+        "<div class='page-hero-actions'><a href='/dashboard' class='btn'>← Dashboard</a><a href='/ui/ai' class='btn btn-muted'>AI analytics</a></div>"
+        "</section>"
     )
 
     if "<main" in html_text:
