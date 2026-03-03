@@ -73,6 +73,11 @@ class SQLiteStorage:
                     snmp_community TEXT NOT NULL DEFAULT 'public',
                     snmp_version TEXT NOT NULL DEFAULT '2c',
                     snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0',
+                    csb_share_path TEXT NOT NULL DEFAULT '',
+                    csb_glob_pattern TEXT NOT NULL DEFAULT '*.txt',
+                    csb_recursive INTEGER NOT NULL DEFAULT 1,
+                    csb_max_files INTEGER NOT NULL DEFAULT 2000,
+                    csb_source TEXT NOT NULL DEFAULT 'csb_merp_txt',
                     FOREIGN KEY(asset_id) REFERENCES assets(id)
                 )
                 """
@@ -211,6 +216,16 @@ class SQLiteStorage:
             conn.execute(
                 "ALTER TABLE collector_targets ADD COLUMN snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0'"
             )
+        if "csb_share_path" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_share_path TEXT NOT NULL DEFAULT ''")
+        if "csb_glob_pattern" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_glob_pattern TEXT NOT NULL DEFAULT '*.txt'")
+        if "csb_recursive" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_recursive INTEGER NOT NULL DEFAULT 1")
+        if "csb_max_files" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_max_files INTEGER NOT NULL DEFAULT 2000")
+        if "csb_source" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_source TEXT NOT NULL DEFAULT 'csb_merp_txt'")
 
     def upsert_asset(self, asset: Asset) -> Asset:
         with self._connect() as conn:
@@ -255,9 +270,10 @@ class SQLiteStorage:
                     poll_interval_sec, enabled, asset_id,
                     winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
                     ssh_metrics_command, ssh_log_path, ssh_tail_lines,
-                    snmp_community, snmp_version, snmp_oids
+                    snmp_community, snmp_version, snmp_oids,
+                    csb_share_path, csb_glob_pattern, csb_recursive, csb_max_files, csb_source
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     address=excluded.address,
@@ -278,7 +294,12 @@ class SQLiteStorage:
                     ssh_tail_lines=excluded.ssh_tail_lines,
                     snmp_community=excluded.snmp_community,
                     snmp_version=excluded.snmp_version,
-                    snmp_oids=excluded.snmp_oids
+                    snmp_oids=excluded.snmp_oids,
+                    csb_share_path=excluded.csb_share_path,
+                    csb_glob_pattern=excluded.csb_glob_pattern,
+                    csb_recursive=excluded.csb_recursive,
+                    csb_max_files=excluded.csb_max_files,
+                    csb_source=excluded.csb_source
                 """,
                 (
                     target.id,
@@ -302,6 +323,11 @@ class SQLiteStorage:
                     self.secret_codec.encrypt(target.snmp_community),
                     target.snmp_version,
                     target.snmp_oids,
+                    target.csb_share_path,
+                    target.csb_glob_pattern,
+                    1 if target.csb_recursive else 0,
+                    target.csb_max_files,
+                    target.csb_source,
                 ),
             )
             conn.execute(
@@ -321,7 +347,8 @@ class SQLiteStorage:
                        poll_interval_sec, enabled, asset_id,
                        winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
                        ssh_metrics_command, ssh_log_path, ssh_tail_lines,
-                       snmp_community, snmp_version, snmp_oids
+                       snmp_community, snmp_version, snmp_oids,
+                       csb_share_path, csb_glob_pattern, csb_recursive, csb_max_files, csb_source
                 FROM collector_targets
                 ORDER BY id
                 """
@@ -333,6 +360,7 @@ class SQLiteStorage:
             data["enabled"] = bool(data["enabled"])
             data["winrm_use_https"] = bool(data["winrm_use_https"])
             data["winrm_validate_tls"] = bool(data["winrm_validate_tls"])
+            data["csb_recursive"] = bool(data["csb_recursive"])
             data["password"] = self.secret_codec.decrypt(data["password"])
             data["snmp_community"] = self.secret_codec.decrypt(data["snmp_community"])
             result.append(CollectorTarget(**data))
