@@ -4,9 +4,11 @@ import json
 import socket
 import threading
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.csb_merp import line_to_event
 from app.models import CollectorState, CollectorTarget, Event, Severity, WorkerHistoryEntry
 from app.services import MonitoringService
 
@@ -135,7 +137,9 @@ class AgentlessWorker:
             return self._collect_winrm_target(target)
         if target.collector_type.value == "ssh":
             return self._collect_ssh_target(target)
-        return self._collect_snmp_target(target)
+        if target.collector_type.value == "snmp":
+            return self._collect_snmp_target(target)
+        return self._collect_csb_merp_share_target(target)
 
     def _collect_winrm_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
         prev = self.service.get_collector_state(target.id)
@@ -347,6 +351,107 @@ class AgentlessWorker:
             failure_streak=0,
         )
         return events, state
+
+    def _collect_csb_merp_share_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
+        prev = self.service.get_collector_state(target.id)
+        current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        try:
+            events, next_cursor = self._pull_csb_merp_share(target, prev.last_cursor)
+        except Exception as exc:
+            streak = prev.failure_streak + 1
+            state = CollectorState(
+                target_id=target.id,
+                last_success_ts=prev.last_success_ts,
+                last_run_ts=current_ts,
+                last_error=f"csb share pull failed: {exc}",
+                last_cursor=prev.last_cursor,
+                failure_streak=streak,
+            )
+            severity = Severity.critical if streak >= 3 else Severity.warning
+            return (
+                [
+                    Event(
+                        asset_id=target.asset_id,
+                        source="agentless_csb_merp",
+                        message=f"[csb] pull failed for '{target.name}': {exc}",
+                        metric="collector_failure_streak",
+                        value=float(streak),
+                        severity=severity,
+                    )
+                ],
+                state,
+            )
+
+        if not events:
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="agentless_csb_merp",
+                    message=f"[csb] no new records for '{target.name}', cursor updated",
+                    severity=Severity.info,
+                )
+            )
+
+        state = CollectorState(
+            target_id=target.id,
+            last_success_ts=current_ts,
+            last_run_ts=current_ts,
+            last_error=None,
+            last_cursor=next_cursor,
+            failure_streak=0,
+        )
+        return events, state
+
+    def _pull_csb_merp_share(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[Event], str]:
+        path = Path(target.csb_share_path or "")
+        if not path.exists() or not path.is_dir():
+            raise RuntimeError(f"share path not found: {target.csb_share_path}")
+
+        cursor_data: dict[str, dict[str, int]] = {}
+        if last_cursor:
+            try:
+                raw = json.loads(last_cursor)
+                if isinstance(raw, dict) and isinstance(raw.get("files"), dict):
+                    cursor_data = {k: v for k, v in raw["files"].items() if isinstance(v, dict)}
+            except Exception:
+                cursor_data = {}
+
+        files = sorted([p for p in path.rglob(target.csb_glob_pattern or "*.txt") if p.is_file()]) if target.csb_recursive else sorted([p for p in path.glob(target.csb_glob_pattern or "*.txt") if p.is_file()])
+        files = files[: max(1, target.csb_max_files)]
+
+        events: list[Event] = []
+        new_cursor: dict[str, dict[str, int]] = {}
+
+        for fp in files:
+            key = str(fp)
+            st = fp.stat()
+            prev = cursor_data.get(key, {})
+            prev_offset = int(prev.get("offset", 0))
+            prev_inode = int(prev.get("inode", -1))
+            inode = int(getattr(st, "st_ino", 0))
+            size = int(st.st_size)
+
+            offset = prev_offset
+            if (prev_inode != -1 and prev_inode != inode) or size < prev_offset:
+                offset = 0
+
+            with fp.open("rb") as fh:
+                fh.seek(max(0, offset))
+                chunk = fh.read()
+                next_offset = int(fh.tell())
+
+            if chunk:
+                for line in chunk.decode("utf-8", errors="ignore").splitlines():
+                    if not line.strip():
+                        continue
+                    event = line_to_event(target.asset_id, line, source=target.csb_source or "csb_merp_txt")
+                    if event is not None:
+                        events.append(event)
+
+            new_cursor[key] = {"offset": next_offset, "inode": inode, "size": size}
+
+        return events, json.dumps({"files": new_cursor}, separators=(",", ":"))
 
     def _collect_probe_target(self, target: CollectorTarget, proto: str) -> tuple[list[Event], CollectorState]:
         result = self._probe_tcp(target.address, target.port, self.timeout_sec)

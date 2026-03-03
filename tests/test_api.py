@@ -132,6 +132,7 @@ def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
     assert "data-collector-scope='winrm'" in page.text
     assert "data-collector-scope='ssh' style='display:none" in page.text
     assert "data-collector-scope='snmp' style='display:none" in page.text
+    assert "data-collector-scope='csb_merp_share' style='display:none" in page.text
     assert "toggleCollectorFields()" in page.text
 
 def test_ui_assets_and_collectors_support_edit_prefill() -> None:
@@ -2424,3 +2425,56 @@ def test_csb_merp_ingest_and_report_filters(tmp_path: Path) -> None:
     assert by_user.json()["users_touched"][0].startswith("4824")
 
 
+
+
+def test_worker_collects_csb_merp_share_incrementally(tmp_path: Path) -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-worker", "name": "merp-worker", "asset_type": "server", "location": "R7"},
+    )
+
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True)
+    log_file = logs_dir / "part1.txt"
+    log_file.write_text(
+        '03.03.2026 10:17:17.294 46192204-002 ID 4649403 Query     DT8580+SSCCDET;?:L1+246700022810196136\n',
+        encoding="utf-8",
+    )
+
+    client.post(
+        "/collectors",
+        json={
+            "id": "col-merp-share",
+            "name": "MERP share",
+            "collector_type": "csb_merp_share",
+            "address": "local",
+            "port": 0,
+            "username": "n/a",
+            "password": "n/a",
+            "poll_interval_sec": 10,
+            "enabled": True,
+            "asset_id": "merp-worker",
+            "csb_share_path": str(logs_dir),
+            "csb_glob_pattern": "*.txt",
+            "csb_recursive": True,
+            "csb_max_files": 100,
+            "csb_source": "csb_merp_txt",
+        },
+    )
+
+    run1 = client.post("/worker/run-once")
+    assert run1.status_code == 200
+
+    events1 = client.get("/assets/merp-worker/events").json()
+    assert sum(1 for e in events1 if e["source"] == "csb_merp_txt") == 1
+
+    # append one more line and ensure only the delta is collected on next run
+    with log_file.open("a", encoding="utf-8") as fh:
+        fh.write('03.03.2026 10:17:18.231 46192204-002 ID 4649403 Query     SYS+MESSAGE;?:L1+4241\n')
+
+    main_module.worker._last_run_at["col-merp-share"] = 0
+    run2 = client.post("/worker/run-once")
+    assert run2.status_code == 200
+
+    events2 = client.get("/assets/merp-worker/events").json()
+    assert sum(1 for e in events2 if e["source"] == "csb_merp_txt") == 2

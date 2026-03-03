@@ -775,12 +775,17 @@ def ui_collectors(edit_id: str = "") -> str:
     form_asset_id = edit_target.asset_id if edit_target else ""
     form_poll_interval = edit_target.poll_interval_sec if edit_target else 60
     form_enabled = edit_target.enabled if edit_target else True
+    form_csb_share_path = edit_target.csb_share_path if edit_target else ""
+    form_csb_glob_pattern = edit_target.csb_glob_pattern if edit_target else "*.txt"
+    form_csb_recursive = edit_target.csb_recursive if edit_target else True
+    form_csb_max_files = edit_target.csb_max_files if edit_target else 2000
+    form_csb_source = edit_target.csb_source if edit_target else "csb_merp_txt"
 
     rows = []
     for c in service.list_collector_targets():
         rows.append(
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
-            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}</td>"
+            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}; csb={c.csb_share_path}:{c.csb_glob_pattern}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
             f"<td><a href='/ui/collectors?edit_id={c.id}'>Edit</a> | <form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0;display:inline'><button type='submit'>Delete</button></form></td></tr>"
         )
@@ -798,6 +803,7 @@ def ui_collectors(edit_id: str = "") -> str:
             <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
             <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
             <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
+            <option value='csb_merp_share' {'selected' if form_type == 'csb_merp_share' else ''}>csb_merp_share (Windows share txt)</option>
           </select>
         </label><br/><br/>
         <label>Address/IP <input name='address' value='{form_address}' required /></label><br/><br/>
@@ -837,6 +843,15 @@ def ui_collectors(edit_id: str = "") -> str:
             </select>
           </label><br/><br/>
           <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
+        </div>
+
+        <div data-collector-scope='csb_merp_share' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>CSB MERP share settings</b><br/><br/>
+          <label>Share path (mounted on API host) <input name='csb_share_path' value='{form_csb_share_path}' placeholder='/mnt/merp_logs/logs/20260303' style='min-width:360px' /></label><br/><br/>
+          <label>Glob pattern <input name='csb_glob_pattern' value='{form_csb_glob_pattern}' /></label><br/><br/>
+          <label>Max files per poll <input name='csb_max_files' type='number' value='{form_csb_max_files}' min='1' max='50000' /></label><br/><br/>
+          <label>Event source <input name='csb_source' value='{form_csb_source}' /></label><br/><br/>
+          <label><input name='csb_recursive' type='checkbox' {'checked' if form_csb_recursive else ''} /> Recursive search</label>
         </div>
         <label>Asset
           <select name='asset_id' required>{''.join(f"<option value='{a.id}' {'selected' if a.id == form_asset_id else ''}>{a.id} ({a.name})</option>" for a in service.list_assets()) or "<option value=''>No assets. Create one first.</option>"}</select>
@@ -887,6 +902,11 @@ def ui_collectors_submit(
     snmp_community: str = Form("public"),
     snmp_version: str = Form("2c"),
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
+    csb_share_path: str = Form(""),
+    csb_glob_pattern: str = Form("*.txt"),
+    csb_recursive: str | None = Form(None),
+    csb_max_files: int = Form(2000),
+    csb_source: str = Form("csb_merp_txt"),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
     existing_target = next((item for item in service.list_collector_targets() if item.id == target_id.strip()), None)
@@ -916,6 +936,11 @@ def ui_collectors_submit(
         snmp_community=snmp_community,
         snmp_version=snmp_version.strip() or "2c",
         snmp_oids=snmp_oids.strip() or "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
+        csb_share_path=csb_share_path.strip(),
+        csb_glob_pattern=csb_glob_pattern.strip() or "*.txt",
+        csb_recursive=csb_recursive is not None,
+        csb_max_files=max(1, min(csb_max_files, 50000)),
+        csb_source=csb_source.strip() or "csb_merp_txt",
     )
     service.upsert_collector_target(target)
     return RedirectResponse(url="/ui/collectors", status_code=303)

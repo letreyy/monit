@@ -21,6 +21,7 @@ class CollectorType(str, Enum):
     winrm = "winrm"
     ssh = "ssh"
     snmp = "snmp"
+    csb_merp_share = "csb_merp_share"
 
 
 class Asset(BaseModel):
@@ -52,6 +53,11 @@ class CollectorTarget(BaseModel):
     snmp_community: str = "public"
     snmp_version: str = "2c"
     snmp_oids: str = "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"
+    csb_share_path: str = ""
+    csb_glob_pattern: str = "*.txt"
+    csb_recursive: bool = True
+    csb_max_files: int = Field(default=2000, ge=1, le=50000)
+    csb_source: str = "csb_merp_txt"
 
 
 class CollectorTargetPublic(BaseModel):
@@ -76,6 +82,11 @@ class CollectorTargetPublic(BaseModel):
     snmp_community: str = "********"
     snmp_version: str
     snmp_oids: str
+    csb_share_path: str
+    csb_glob_pattern: str
+    csb_recursive: bool
+    csb_max_files: int
+    csb_source: str
 
     @classmethod
     def from_target(cls, target: "CollectorTarget") -> "CollectorTargetPublic":

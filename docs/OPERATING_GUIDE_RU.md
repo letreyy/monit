@@ -347,3 +347,39 @@ curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?user=4824"
 - цепочку запросов/ответов (`Import/Query/Write`);
 - список затронутых SSCC, скриптов, пользователей;
 - ошибки `SYS+ERRINFO` (код и текст).
+
+
+## 9) Периодический автосбор CSB MERP из Windows share
+
+Теперь можно не только вручную импортировать, но и включить **периодический сбор** через worker:
+
+1. Смонтируйте сетевую шару на хосте API (например `/mnt/merp_logs`).
+2. Создайте collector target типа `csb_merp_share` (`/ui/collectors` или `POST /collectors`) и укажите:
+   - `csb_share_path` — путь к смонтированной папке,
+   - `csb_glob_pattern` — маска файлов (обычно `*.txt`),
+   - `csb_recursive` — рекурсивный обход,
+   - `csb_max_files` — лимит файлов за один poll,
+   - `csb_source` — source для сохранённых events (например `csb_merp_txt`).
+3. Убедитесь, что target `enabled=true`, и worker будет забирать **только новые хвосты файлов** по курсору.
+
+Пример API-запроса:
+
+```bash
+curl -X POST http://127.0.0.1:8050/collectors   -H "Content-Type: application/json"   -d '{
+    "id":"col-merp-share-01",
+    "name":"MERP share pull",
+    "collector_type":"csb_merp_share",
+    "address":"local",
+    "port":0,
+    "username":"n/a",
+    "password":"n/a",
+    "poll_interval_sec":60,
+    "enabled":true,
+    "asset_id":"merp-01",
+    "csb_share_path":"/mnt/merp_logs/logs/20260303",
+    "csb_glob_pattern":"*.txt",
+    "csb_recursive":true,
+    "csb_max_files":2000,
+    "csb_source":"csb_merp_txt"
+  }'
+```
