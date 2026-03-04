@@ -9,19 +9,29 @@ function renderTrend(trend) {
   }
 
   const maxVal = Math.max(...values, 1);
+  const count = values.length;
+  const chartLeft = 20;
+  const chartRight = 540;
+  const chartBottom = 140;
+  const chartWidth = chartRight - chartLeft;
+  const step = count > 1 ? chartWidth / (count - 1) : 0;
+
   const points = values.map((v, i) => {
-    const x = 20 + i * 90;
-    const y = 140 - Math.floor((v / maxVal) * 110);
+    const x = chartLeft + i * step;
+    const y = chartBottom - Math.floor((v / maxVal) * 110);
     return `${x},${y}`;
   }).join(' ');
 
+  const labelStep = Math.max(1, Math.ceil(count / 8));
   const labelsSvg = labels.map((label, i) => {
-    const x = 20 + i * 90;
-    return `<text x='${x}' y='158' font-size='10' fill='#667'>${label.slice(2)}</text>`;
+    if (i % labelStep !== 0 && i !== labels.length - 1) return '';
+    const x = chartLeft + i * step;
+    const shortLabel = label.length >= 10 ? label.slice(5) : label;
+    return `<text x='${x}' y='158' font-size='10' fill='#667'>${shortLabel}</text>`;
   }).join('');
 
   svg.innerHTML = `
-    <line x1='20' y1='140' x2='540' y2='140' stroke='#cbd5e1' stroke-width='1' />
+    <line x1='${chartLeft}' y1='${chartBottom}' x2='${chartRight}' y2='${chartBottom}' stroke='#cbd5e1' stroke-width='1' />
     <polyline points='${points}' fill='rgba(14,165,233,0.15)' stroke='#0ea5e9' stroke-width='3' />
     ${labelsSvg}
   `;
