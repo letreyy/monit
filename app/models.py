@@ -21,6 +21,7 @@ class CollectorType(str, Enum):
     winrm = "winrm"
     ssh = "ssh"
     snmp = "snmp"
+    ilo = "ilo"
     csb_merp_share = "csb_merp_share"
 
 
@@ -53,6 +54,10 @@ class CollectorTarget(BaseModel):
     snmp_community: str = "public"
     snmp_version: str = "2c"
     snmp_oids: str = "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"
+    ilo_use_https: bool = True
+    ilo_validate_tls: bool = False
+    ilo_log_path: str = "/rest/v1/Systems/1/LogServices/IML/Entries"
+    ilo_event_limit: int = Field(default=50, ge=1, le=500)
     csb_share_path: str = ""
     csb_glob_pattern: str = "*.txt"
     csb_recursive: bool = True
@@ -82,6 +87,10 @@ class CollectorTargetPublic(BaseModel):
     snmp_community: str = "********"
     snmp_version: str
     snmp_oids: str
+    ilo_use_https: bool
+    ilo_validate_tls: bool
+    ilo_log_path: str
+    ilo_event_limit: int
     csb_share_path: str
     csb_glob_pattern: str
     csb_recursive: bool
