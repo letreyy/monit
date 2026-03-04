@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from collections import Counter, deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Callable
+from urllib.parse import quote_plus
 from urllib.request import urlopen
 from urllib.error import URLError
 
@@ -1362,15 +1364,27 @@ def ui_asset_delete(asset_id: str) -> RedirectResponse:
 
 
 @app.get("/ui/assets/{asset_id}", response_class=HTMLResponse)
-def ui_asset_detail(asset_id: str) -> str:
+def ui_asset_detail(asset_id: str, correlation: str = "") -> str:
     assets = [a for a in service.list_assets() if a.id == asset_id]
     if not assets:
         return "<html><body><h1>Asset not found</h1><a href='/ui/assets'>Back</a></body></html>"
 
     asset = assets[0]
-    events = service.list_events(asset_id, limit=20)
+    correlation_query = correlation.strip()
+    correlation_matchers: dict[str, Callable[[str], bool]] = {
+        "Repeated unexpected shutdown pattern": lambda message: "eventid=6008" in message or "eventid=41" in message,
+        "Burst of failed logons": lambda message: "eventid=4625" in message,
+        "Windows storage error cluster": lambda message: bool(re.search(r"eventid=(7|51|55|153)", message)),
+    }
+
+    selected_matcher = correlation_matchers.get(correlation_query)
+    if selected_matcher:
+        all_events = service.list_events(asset_id, limit=10000)
+        events = [e for e in all_events if e.source == "windows_eventlog" and selected_matcher(e.message.lower())]
+    else:
+        events = service.list_events(asset_id, limit=20)
     event_rows = "".join(
-        f"<tr><td>{e.timestamp}</td><td>{e.source}</td><td>{e.severity.value}</td><td>{e.message}</td></tr>" for e in events
+        f"<tr><td>{e.timestamp}</td><td>{html.escape(e.source)}</td><td>{e.severity.value}</td><td>{html.escape(e.message)}</td></tr>" for e in events
     ) or "<tr><td colspan='4'>No events yet</td></tr>"
 
     insights = service.build_correlation_insights(asset_id)
@@ -1379,7 +1393,36 @@ def ui_asset_detail(asset_id: str) -> str:
     ) or "<li>No insights yet</li>"
 
     rec = service.build_recommendation(asset_id)
-    actions = "".join(f"<li>{a}</li>" for a in rec.actions)
+    correlation_action_re = re.compile(r"^Correlation: (?P<title>.+) \((?P<count>\d+) events\)$")
+    action_items: list[str] = []
+    for action in rec.actions:
+        match = correlation_action_re.match(action)
+        if not match:
+            action_items.append(f"<li>{html.escape(action)}</li>")
+            continue
+
+        title = match.group("title")
+        count = match.group("count")
+        params = f"correlation={quote_plus(title)}"
+        if selected_matcher and title == correlation_query:
+            action_items.append(
+                "<li><b>Correlation:</b> "
+                f"<a href='/ui/assets/{quote_plus(asset.id)}' style='margin-right:8px'>"
+                f"{html.escape(title)}</a>"
+                f"<b>{count} events</b>"
+                "</li>"
+            )
+        else:
+            action_items.append(
+                "<li><b>Correlation:</b> "
+                f"<a href='/ui/assets/{quote_plus(asset.id)}?{params}'>"
+                f"{html.escape(title)} ({count} events)</a>"
+                "</li>"
+            )
+    actions = "".join(action_items)
+    events_heading = "Recent events"
+    if selected_matcher and correlation_query:
+        events_heading = f"Correlation events: {html.escape(correlation_query)} ({len(events)})"
 
     return f"""
     <html><body>
@@ -1391,7 +1434,7 @@ def ui_asset_detail(asset_id: str) -> str:
       <ul>{actions}</ul>
       <h2>Correlation insights</h2>
       <ul>{insights_rows}</ul>
-      <h2>Recent events</h2>
+      <h2>{events_heading}</h2>
       <table>
         <thead><tr><th>Timestamp</th><th>Source</th><th>Severity</th><th>Message</th></tr></thead>
         <tbody>{event_rows}</tbody>
@@ -3128,10 +3171,10 @@ def _build_dashboard_payload(
 
     trend_counts: Counter[str] = Counter()
     for e in filtered_events:
-        month = str(e.timestamp)[:7]
-        trend_counts[month] += 1
-    trend_labels = sorted(trend_counts.keys())[-6:]
-    trend_values = [trend_counts[m] for m in trend_labels]
+        day = e.timestamp.date().isoformat()
+        trend_counts[day] += 1
+    trend_labels = sorted(trend_counts.keys())
+    trend_values = [trend_counts[day] for day in trend_labels]
 
     filtered_asset_counts = Counter(e.asset_id for e in filtered_events)
 
