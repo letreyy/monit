@@ -847,13 +847,66 @@ $events | ConvertTo-Json -Depth 4 -Compress
         path = target.ilo_log_path.strip() or "/redfish/v1/Systems/1/LogServices/IML/Entries"
         if not path.startswith("/"):
             path = "/" + path
-        endpoint = f"{scheme}://{target.address}:{target.port}{path}"
 
         request_limit = max(1, min(target.ilo_event_limit, 500))
         is_initial_pull = not (last_cursor and str(last_cursor).strip())
         if is_initial_pull:
             request_limit = max(request_limit, 100)
 
+        def _full_url(relative_path: str) -> str:
+            return f"{scheme}://{target.address}:{target.port}{relative_path}"
+
+        def _discover_entries_path(client: object) -> str | None:
+            try:
+                systems_resp = client.get(_full_url("/redfish/v1/Systems"))
+                systems_payload = systems_resp.json() if systems_resp.status_code < 400 else {}
+            except Exception:
+                return None
+            members = systems_payload.get("Members") if isinstance(systems_payload, dict) else None
+            if not isinstance(members, list):
+                return None
+            for system in members:
+                system_path = ""
+                if isinstance(system, dict):
+                    system_path = str(system.get("@odata.id") or "").strip()
+                if not system_path.startswith("/"):
+                    continue
+                logservices_path = f"{system_path.rstrip('/')}/LogServices"
+                try:
+                    ls_resp = client.get(_full_url(logservices_path))
+                    ls_payload = ls_resp.json() if ls_resp.status_code < 400 else {}
+                except Exception:
+                    continue
+                ls_members = ls_payload.get("Members") if isinstance(ls_payload, dict) else None
+                if not isinstance(ls_members, list):
+                    continue
+                for service in ls_members:
+                    service_path = ""
+                    if isinstance(service, dict):
+                        service_path = str(service.get("@odata.id") or "").strip()
+                    if not service_path.startswith("/"):
+                        continue
+                    try:
+                        svc_resp = client.get(_full_url(service_path))
+                        svc_payload = svc_resp.json() if svc_resp.status_code < 400 else {}
+                    except Exception:
+                        svc_payload = {}
+                    entries_path = ""
+                    if isinstance(svc_payload, dict):
+                        entries = svc_payload.get("Entries")
+                        if isinstance(entries, dict):
+                            entries_path = str(entries.get("@odata.id") or "").strip()
+                    if not entries_path.startswith("/"):
+                        entries_path = f"{service_path.rstrip('/')}/Entries"
+                    try:
+                        probe = client.get(_full_url(entries_path), params={"$top": 1})
+                        if probe.status_code < 400:
+                            return entries_path
+                    except Exception:
+                        continue
+            return None
+
+        endpoint = _full_url(path)
         try:
             with httpx.Client(
                 timeout=self.timeout_sec,
@@ -861,6 +914,11 @@ $events | ConvertTo-Json -Depth 4 -Compress
                 auth=httpx.BasicAuth(target.username, target.password),
             ) as client:
                 response = client.get(endpoint, params={"$top": request_limit})
+                if response.status_code == 404:
+                    discovered_path = _discover_entries_path(client)
+                    if discovered_path and discovered_path != path:
+                        endpoint = _full_url(discovered_path)
+                        response = client.get(endpoint, params={"$top": request_limit})
         except Exception as exc:
             message = str(exc)
             name = exc.__class__.__name__

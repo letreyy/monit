@@ -264,6 +264,21 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
   - iLO: Redfish IML pull (`/redfish/v1/.../LogServices/IML/Entries`) с курсором по Id; на первом запуске берутся последние 100 записей (или больше, если `ilo_event_limit` > 100).
 - Для collector targets доступны профили (порты/команды/OID/WinRM options и т.д.).
 
+
+#### Как узнать корректный Redfish путь IML/Entries на своём iLO
+Если стандартный путь не подходит, можно пройтись по API вручную:
+1. `GET /redfish/v1/Systems` — получить список систем и их `@odata.id`.
+2. Для нужной системы: `GET <System@odata.id>/LogServices` — список сервисов логов (`IML`, `IEL` и т.п.).
+3. Для сервиса: `GET <LogService@odata.id>` — взять `Entries.@odata.id`.
+4. Этот путь и указывайте в поле `ilo_log_path` (например, `/redfish/v1/Systems/437XR1138R2/LogServices/IEL/Entries`).
+
+Пример (замените host/user/pass):
+```bash
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems | jq '.Members[]."@odata.id"'
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems/<ID>/LogServices | jq '.Members[]."@odata.id"'
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems/<ID>/LogServices/<LOG_ID> | jq '.Entries."@odata.id"'
+```
+
 ### 4) Worker и диагностика
 - Фоновый worker на lifecycle FastAPI (`lifespan`) с ручным `run-once`.
 - Персистентное состояние collector'ов: `last_cursor`, `failure_streak`, `last_error`, run-метаданные.
