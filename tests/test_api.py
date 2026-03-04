@@ -2381,6 +2381,20 @@ def test_ui_csb_merp_import_and_report(tmp_path: Path) -> None:
     assert "246700022810196136" in page.text
     assert "DT8580+SSCCDET" in page.text
 
+
+
+def test_ui_csb_merp_apply_filters_with_recursive_bool_query() -> None:
+    client.post(
+        "/assets",
+        json={"id": "merp-bool", "name": "merp-bool", "asset_type": "server", "location": "R2"},
+    )
+    resp = client.get(
+        "/ui/csb-merp",
+        params={"asset_id": "merp-bool", "recursive": "true", "limit": 3000},
+    )
+    assert resp.status_code == 200
+    assert "CSB MERP log center" in resp.text
+
 def test_csb_merp_ingest_and_report_filters(tmp_path: Path) -> None:
     client.post(
         "/assets",

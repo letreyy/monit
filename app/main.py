@@ -2228,7 +2228,7 @@ def ui_csb_merp(
         <input type='hidden' name='base_path' value='{base_path}'/>
         <input type='hidden' name='glob_pattern' value='{glob_pattern}'/>
         <input type='hidden' name='max_files' value='{max_files}'/>
-        <input type='hidden' name='recursive' value={'true' if recursive else 'false'}/>
+        <input type='hidden' name='recursive' value="{'true' if recursive else 'false'}"/>
         <button type='submit' style='margin-left:10px'>Apply filters</button>
       </form>
 
