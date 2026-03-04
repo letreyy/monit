@@ -19,6 +19,7 @@
   - `/ui/collectors` — настройка collector targets,
   - `/ui/diagnostics` — диагностика worker,
   - `/ui/ai` и `/ui/ai/policies` — AI аналитика и политики.
+  - `/ui/csb-merp` — импорт/поиск CSB MERP txt-логов и цепочки по SSCC/скрипту/пользователю.
 - Технические интерфейсы: `/docs`, `/redoc`, `/dashboard`.
 
 ### 1.3 Авто-сбор
@@ -309,3 +310,78 @@ curl -sS -X POST http://127.0.0.1:8050/collectors \
   - логин/пароль,
   - доступ к `ssh_log_path`,
   - корректность `ssh_metrics_command`.
+
+## 7) CSB MERP txt-логи (Windows share / SMB)
+
+Для сценариев вида `\\logs\\20260303\\51101\\http_10.64.28.23\\*.txt`:
+
+1. Используйте либо смонтированную Windows-шару (например, `/mnt/merp_logs`), либо прямой UNC-путь вида `//10.10.10.10/merp/logs`.
+2. Создайте/используйте asset (например, `merp-01`).
+3. Импортируйте логи:
+
+```bash
+curl -X POST http://127.0.0.1:8050/ingest/csb-merp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "asset_id":"merp-01",
+    "base_path":"//10.10.10.10/merp/logs/20260303",
+    "smb_username":"DOMAIN\\user",
+    "smb_password":"secret",
+    "recursive": true,
+    "glob_pattern":"*.txt"
+  }'
+```
+
+4. Получите отчёт-цепочку:
+
+```bash
+# По конкретному SSCC
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?sscc=246700022810196136"
+
+# По скрипту
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?script=64_TMC_SPE"
+
+# По пользователю (id/имя)
+curl "http://127.0.0.1:8050/assets/merp-01/csb-merp/report?user=4824"
+```
+
+Отчёт содержит:
+- цепочку запросов/ответов (`Import/Query/Write`);
+- список затронутых SSCC, скриптов, пользователей;
+- ошибки `SYS+ERRINFO` (код и текст).
+
+
+## 9) Периодический автосбор CSB MERP из Windows share
+
+Теперь можно не только вручную импортировать, но и включить **периодический сбор** через worker:
+
+1. Укажите либо смонтированный путь, либо прямой UNC путь `//server/share/...`.
+2. Создайте collector target типа `csb_merp_share` (`/ui/collectors` или `POST /collectors`) и укажите:
+   - `csb_share_path` — путь к смонтированной папке,
+   - `csb_glob_pattern` — маска файлов (обычно `*.txt`),
+   - `csb_recursive` — рекурсивный обход,
+   - `csb_max_files` — лимит файлов за один poll,
+   - `csb_source` — source для сохранённых events (например `csb_merp_txt`).
+3. Убедитесь, что target `enabled=true`, и worker будет забирать **только новые хвосты файлов** по курсору.
+
+Пример API-запроса:
+
+```bash
+curl -X POST http://127.0.0.1:8050/collectors   -H "Content-Type: application/json"   -d '{
+    "id":"col-merp-share-01",
+    "name":"MERP share pull",
+    "collector_type":"csb_merp_share",
+    "address":"local",
+    "port":0,
+    "username":"n/a",
+    "password":"n/a",
+    "poll_interval_sec":60,
+    "enabled":true,
+    "asset_id":"merp-01",
+    "csb_share_path":"/mnt/merp_logs/logs/20260303",
+    "csb_glob_pattern":"*.txt",
+    "csb_recursive":true,
+    "csb_max_files":2000,
+    "csb_source":"csb_merp_txt"
+  }'
+```

@@ -22,6 +22,10 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.models import (
     AccessAuditEntry,
+    CsbMerpIngestRequest,
+    CsbMerpIngestSummary,
+    CsbMerpReport,
+    CsbMerpChainItem,
     Alert,
     Asset,
     AssetType,
@@ -48,6 +52,15 @@ from app.models import (
     Overview,
     Recommendation,
     Severity,
+)
+from app.csb_merp import (
+    extract_error,
+    extract_script,
+    extract_ssccs,
+    extract_user,
+    iter_log_files,
+    line_to_event,
+    parse_csb_merp_line,
 )
 from app.services import MonitoringService
 from app.worker import AgentlessWorker
@@ -498,7 +511,9 @@ POLICY_RULES: list[tuple[str, str, str, str, str]] = [
     ("POST", "/assets", "operator", "write assets", "admin"),
     ("POST", "/events", "operator", "write events", "admin"),
     ("POST", "/ingest/events", "operator", "ingest events", "admin"),
+    ("POST", "/ingest/csb-merp", "operator", "ingest csb-merp logs", "admin"),
 ]
+
 
 
 def _policy_rule_for_request(method: str, path: str) -> tuple[str, str, str] | None:
@@ -564,6 +579,7 @@ def home() -> str:
               <li><a href='/ui/collectors'>UI: Agentless Collectors</a></li>
               <li><a href='/ui/auth'>UI: Auth session</a></li>
               <li><a href='/ui/compliance'>UI: Compliance center</a></li>
+              <li><a href='/ui/csb-merp'>UI: CSB MERP logs</a></li>
               <li><a href='/docs'>Swagger UI</a></li>
             </ul>
           </div>
@@ -759,12 +775,17 @@ def ui_collectors(edit_id: str = "") -> str:
     form_asset_id = edit_target.asset_id if edit_target else ""
     form_poll_interval = edit_target.poll_interval_sec if edit_target else 60
     form_enabled = edit_target.enabled if edit_target else True
+    form_csb_share_path = edit_target.csb_share_path if edit_target else ""
+    form_csb_glob_pattern = edit_target.csb_glob_pattern if edit_target else "*.txt"
+    form_csb_recursive = edit_target.csb_recursive if edit_target else True
+    form_csb_max_files = edit_target.csb_max_files if edit_target else 2000
+    form_csb_source = edit_target.csb_source if edit_target else "csb_merp_txt"
 
     rows = []
     for c in service.list_collector_targets():
         rows.append(
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
-            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}</td>"
+            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}; csb={c.csb_share_path}:{c.csb_glob_pattern}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
             f"<td><a href='/ui/collectors?edit_id={c.id}'>Edit</a> | <form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0;display:inline'><button type='submit'>Delete</button></form></td></tr>"
         )
@@ -782,6 +803,7 @@ def ui_collectors(edit_id: str = "") -> str:
             <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
             <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
             <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
+            <option value='csb_merp_share' {'selected' if form_type == 'csb_merp_share' else ''}>csb_merp_share (Windows share txt)</option>
           </select>
         </label><br/><br/>
         <label>Address/IP <input name='address' value='{form_address}' required /></label><br/><br/>
@@ -821,6 +843,15 @@ def ui_collectors(edit_id: str = "") -> str:
             </select>
           </label><br/><br/>
           <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
+        </div>
+
+        <div data-collector-scope='csb_merp_share' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>CSB MERP share settings</b><br/><br/>
+          <label>Share path (mounted path or UNC like //10.10.10.10/merp/logs) <input name='csb_share_path' value='{form_csb_share_path}' placeholder='/mnt/merp_logs/logs/20260303 or //10.10.10.10/merp/logs' style='min-width:360px' /></label><br/><br/>
+          <label>Glob pattern <input name='csb_glob_pattern' value='{form_csb_glob_pattern}' /></label><br/><br/>
+          <label>Max files per poll <input name='csb_max_files' type='number' value='{form_csb_max_files}' min='1' max='50000' /></label><br/><br/>
+          <label>Event source <input name='csb_source' value='{form_csb_source}' /></label><br/><br/>
+          <label><input name='csb_recursive' type='checkbox' {'checked' if form_csb_recursive else ''} /> Recursive search</label>
         </div>
         <label>Asset
           <select name='asset_id' required>{''.join(f"<option value='{a.id}' {'selected' if a.id == form_asset_id else ''}>{a.id} ({a.name})</option>" for a in service.list_assets()) or "<option value=''>No assets. Create one first.</option>"}</select>
@@ -871,6 +902,11 @@ def ui_collectors_submit(
     snmp_community: str = Form("public"),
     snmp_version: str = Form("2c"),
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
+    csb_share_path: str = Form(""),
+    csb_glob_pattern: str = Form("*.txt"),
+    csb_recursive: str | None = Form(None),
+    csb_max_files: int = Form(2000),
+    csb_source: str = Form("csb_merp_txt"),
     enabled: str | None = Form(None),
 ) -> RedirectResponse:
     existing_target = next((item for item in service.list_collector_targets() if item.id == target_id.strip()), None)
@@ -900,6 +936,11 @@ def ui_collectors_submit(
         snmp_community=snmp_community,
         snmp_version=snmp_version.strip() or "2c",
         snmp_oids=snmp_oids.strip() or "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
+        csb_share_path=csb_share_path.strip(),
+        csb_glob_pattern=csb_glob_pattern.strip() or "*.txt",
+        csb_recursive=csb_recursive is not None,
+        csb_max_files=max(1, min(csb_max_files, 50000)),
+        csb_source=csb_source.strip() or "csb_merp_txt",
     )
     service.upsert_collector_target(target)
     return RedirectResponse(url="/ui/collectors", status_code=303)
@@ -1634,6 +1675,288 @@ def ui_events_submit(
     )
     service.register_event(event)
     return RedirectResponse(url=f"/ui/assets/{asset_id}", status_code=303)
+
+
+def _ingest_csb_merp_from_path(
+    asset_id: str,
+    base_path: str,
+    recursive: bool = True,
+    glob_pattern: str = "*.txt",
+    max_files: int = 5000,
+    smb_username: str | None = None,
+    smb_password: str | None = None,
+) -> CsbMerpIngestSummary:
+    is_unc = base_path.strip().startswith("//") or base_path.strip().startswith("\\")
+
+    lines_seen = 0
+    lines_parsed = 0
+    accepted = 0
+
+    if is_unc:
+        try:
+            import fnmatch
+            import smbclient  # type: ignore
+        except ImportError as exc:
+            raise RuntimeError("smbclient/smbprotocol is not installed") from exc
+
+        share_path = base_path.strip().replace("/", "\\")
+        if not share_path.startswith("\\"):
+            share_path = "\\" + share_path.lstrip("\\")
+        parts = [p for p in share_path.split("\\") if p]
+        if len(parts) < 2:
+            raise RuntimeError(f"invalid UNC path: {base_path}")
+        server = parts[0]
+        smbclient.register_session(server, username=smb_username or None, password=smb_password or None)
+
+        files: list[str] = []
+        if recursive:
+            for root, _dirs, names in smbclient.walk(share_path):
+                for name in names:
+                    if fnmatch.fnmatch(name, glob_pattern):
+                        files.append(root.rstrip("\\") + "\\" + name)
+        else:
+            for entry in smbclient.scandir(share_path):
+                if entry.is_file() and fnmatch.fnmatch(entry.name, glob_pattern):
+                    files.append(share_path.rstrip("\\") + "\\" + entry.name)
+
+        files_found = len(files)
+        files = sorted(files)[:max(1, max_files)]
+
+        for file_path in files:
+            with smbclient.open_file(file_path, mode="rb") as fh:
+                text = fh.read().decode("utf-8", errors="ignore")
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                lines_seen += 1
+                event = line_to_event(asset_id, line)
+                if event is None:
+                    continue
+                lines_parsed += 1
+                _stored, is_new = service.register_event(event)
+                if is_new:
+                    accepted += 1
+    else:
+        files = iter_log_files(base_path, recursive=recursive, glob_pattern=glob_pattern)
+        files_found = len(files)
+        files = files[:max(1, max_files)]
+
+        for file_path in files:
+            for line in file_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if not line.strip():
+                    continue
+                lines_seen += 1
+                event = line_to_event(asset_id, line)
+                if event is None:
+                    continue
+                lines_parsed += 1
+                _stored, is_new = service.register_event(event)
+                if is_new:
+                    accepted += 1
+
+    return CsbMerpIngestSummary(
+        asset_id=asset_id,
+        base_path=base_path,
+        files_found=files_found,
+        files_processed=len(files),
+        lines_seen=lines_seen,
+        lines_parsed=lines_parsed,
+        events_accepted=accepted,
+    )
+
+
+def _build_csb_merp_report(asset_id: str, sscc: str | None = None, script: str | None = None, user: str | None = None, limit: int = 3000) -> CsbMerpReport:
+    events = list(reversed(service.list_events(asset_id, limit=min(max(limit, 100), 20000))))
+    raw_lines = [e.message for e in events if e.source == "csb_merp_txt"]
+
+    chain: list[CsbMerpChainItem] = []
+    seen_sscc: set[str] = set()
+    seen_scripts: set[str] = set()
+    seen_users: set[str] = set()
+    errors: list[dict[str, str]] = []
+
+    for line in raw_lines:
+        parsed = parse_csb_merp_line(line)
+        if not parsed:
+            continue
+
+        ssccs = extract_ssccs(parsed["payload"])
+        script_name = extract_script(parsed["payload"])
+        user_info = extract_user(parsed["payload"])
+        err = extract_error(parsed["payload"])
+
+        if sscc and sscc not in ssccs:
+            continue
+        if script and script_name != script:
+            continue
+        if user:
+            u = user.lower()
+            user_text = ""
+            if user_info:
+                user_text = f"{user_info['user_id']} {user_info['first_name']} {user_info['last_name']}".lower()
+            if u not in parsed["payload"].lower() and u not in user_text:
+                continue
+
+        if ssccs:
+            seen_sscc.update(ssccs)
+        if script_name:
+            seen_scripts.add(script_name)
+        if user_info:
+            seen_users.add(f"{user_info['user_id']} {user_info['first_name']} {user_info['last_name']}")
+        if err:
+            errors.append(err)
+
+        chain.append(
+            CsbMerpChainItem(
+                timestamp=parsed["ts"],
+                session=parsed["session"],
+                thread_id=parsed["thread_id"],
+                kind=parsed["kind"],
+                command=parsed["command"],
+                payload=parsed["payload"],
+                sscc=ssccs,
+                script=script_name,
+                user_id=user_info["user_id"] if user_info else None,
+                user_name=f"{user_info['first_name']} {user_info['last_name']}" if user_info else None,
+                error_code=err["code"] if err else None,
+                error_message=err["message"] if err else None,
+            )
+        )
+
+    return CsbMerpReport(
+        asset_id=asset_id,
+        total_lines=len(raw_lines),
+        matched_lines=len(chain),
+        filters={"sscc": sscc or "", "script": script or "", "user": user or ""},
+        sscc_touched=sorted(seen_sscc),
+        scripts_touched=sorted(seen_scripts),
+        users_touched=sorted(seen_users),
+        errors=errors[:100],
+        chain=chain[-500:],
+    )
+
+
+@app.get("/ui/csb-merp", response_class=HTMLResponse)
+def ui_csb_merp(
+    request: Request,
+    asset_id: str = "",
+    base_path: str = "",
+    recursive: bool = True,
+    glob_pattern: str = "*.txt",
+    max_files: int = 5000,
+    sscc: str = "",
+    script: str = "",
+    user: str = "",
+    limit: int = 3000,
+    msg: str = "",
+) -> str:
+    assets = service.list_assets()
+    options = ''.join(f"<option value='{a.id}' {'selected' if a.id == asset_id else ''}>{a.id}</option>" for a in assets)
+
+    report_html = "<div class='muted'>Выберите asset и нажмите Apply filters, чтобы построить цепочку.</div>"
+    if asset_id and _asset_exists(asset_id):
+        report = _build_csb_merp_report(
+            asset_id=asset_id,
+            sscc=sscc.strip() or None,
+            script=script.strip() or None,
+            user=user.strip() or None,
+            limit=limit,
+        )
+        errors_html = ''.join(
+            f"<li><b>{e.get('code','')}</b>: {e.get('message','')}</li>"
+            for e in report.errors[:20]
+        ) or "<li>Нет ошибок</li>"
+        chain_rows = ''.join(
+            f"<tr><td>{row.timestamp}</td><td>{row.kind}</td><td>{row.command}</td><td>{', '.join(row.sscc)}</td><td>{row.script or ''}</td><td>{(row.user_id or '') + (' ' + row.user_name if row.user_name else '')}</td><td>{row.error_code or ''}</td><td style='max-width:560px;white-space:pre-wrap'>{row.payload}</td></tr>"
+            for row in report.chain
+        ) or "<tr><td colspan='8'>Нет данных по фильтрам</td></tr>"
+
+        report_html = f"""
+        <div style='display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:10px'>
+          <div class='card'><b>Total lines</b><div>{report.total_lines}</div></div>
+          <div class='card'><b>Matched lines</b><div>{report.matched_lines}</div></div>
+          <div class='card'><b>SSCC touched</b><div>{len(report.sscc_touched)}</div></div>
+          <div class='card'><b>Errors</b><div>{len(report.errors)}</div></div>
+        </div>
+        <div class='panel'>
+          <p><b>Scripts:</b> {', '.join(report.scripts_touched) or '-'}</p>
+          <p><b>Users:</b> {', '.join(report.users_touched) or '-'}</p>
+          <details><summary>Errors (top 20)</summary><ul>{errors_html}</ul></details>
+          <h3 style='margin:10px 0 8px 0'>Chain</h3>
+          <div style='overflow:auto;max-height:520px'>
+            <table><thead><tr><th>Timestamp</th><th>Kind</th><th>Command</th><th>SSCC</th><th>Script</th><th>User</th><th>Err</th><th>Payload</th></tr></thead><tbody>{chain_rows}</tbody></table>
+          </div>
+        </div>
+        """
+
+    return f"""
+    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1500px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+      <h1>CSB MERP log center</h1>
+      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/assets'>Assets</a> | <a href='/ingest/csb-merp'>JSON ingest API</a></p>
+      {f"<p style='background:#ecfdf5;border:1px solid #86efac;padding:10px;border-radius:8px'>{msg}</p>" if msg else ''}
+
+      <form method='post' action='/ui/csb-merp/ingest' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:12px'>
+        <h3 style='margin-top:0'>1) Import txt logs from mounted share</h3>
+        <label>Asset <select name='asset_id' required><option value=''>select...</option>{options}</select></label>
+        <label style='margin-left:10px'>Base path <input name='base_path' value='{base_path}' placeholder='/mnt/merp_logs/logs/20260303 or //10.10.10.10/merp/logs' style='min-width:380px' required /></label>
+        <label style='margin-left:10px'>Glob <input name='glob_pattern' value='{glob_pattern}'/></label>
+        <label style='margin-left:10px'>Max files <input type='number' name='max_files' value='{max_files}' min='1' max='50000'/></label>
+        <label style='margin-left:10px'><input type='checkbox' name='recursive' {'checked' if recursive else ''}/> recursive</label><br/><br/>
+        <label>SMB username (for //server/share) <input name='smb_username' value='' placeholder='DOMAIN\\user or user' /></label>
+        <label style='margin-left:10px'>SMB password <input type='password' name='smb_password' value='' /></label>
+        <button type='submit' style='margin-left:10px'>Import</button>
+      </form>
+
+      <form method='get' action='/ui/csb-merp' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px;margin-bottom:12px'>
+        <h3 style='margin-top:0'>2) Build report / chain</h3>
+        <label>Asset <select name='asset_id' required><option value=''>select...</option>{options}</select></label>
+        <label style='margin-left:10px'>SSCC <input name='sscc' value='{sscc}' placeholder='246700022810196136'/></label>
+        <label style='margin-left:10px'>Script <input name='script' value='{script}' placeholder='64_TMC_SPE'/></label>
+        <label style='margin-left:10px'>User <input name='user' value='{user}' placeholder='4824 / Татьяна'/></label>
+        <label style='margin-left:10px'>Limit <input type='number' name='limit' value='{limit}' min='100' max='20000'/></label>
+        <input type='hidden' name='base_path' value='{base_path}'/>
+        <input type='hidden' name='glob_pattern' value='{glob_pattern}'/>
+        <input type='hidden' name='max_files' value='{max_files}'/>
+        <input type='hidden' name='recursive' value="{'true' if recursive else 'false'}"/>
+        <button type='submit' style='margin-left:10px'>Apply filters</button>
+      </form>
+
+      {report_html}
+      <style>table{{border-collapse:collapse;width:100%}}th,td{{border-bottom:1px solid #e2e8f0;text-align:left;padding:6px;font-size:12px}}.card,.panel{{background:#fff;border:1px solid #d8dee4;border-radius:10px;padding:10px}}.muted{{color:#64748b}}</style>
+    </body></html>
+    """
+
+
+@app.post("/ui/csb-merp/ingest")
+def ui_csb_merp_ingest(
+    request: Request,
+    asset_id: str = Form(...),
+    base_path: str = Form(...),
+    glob_pattern: str = Form("*.txt"),
+    max_files: int = Form(5000),
+    recursive: str | None = Form(None),
+    smb_username: str = Form(""),
+    smb_password: str = Form(""),
+) -> RedirectResponse:
+    if not _asset_exists(asset_id):
+        return RedirectResponse(url="/ui/csb-merp?msg=Asset+not+found", status_code=303)
+    try:
+        summary = _ingest_csb_merp_from_path(
+            asset_id=asset_id,
+            base_path=base_path.strip(),
+            recursive=bool(recursive),
+            glob_pattern=glob_pattern.strip() or "*.txt",
+            max_files=max(1, min(max_files, 50000)),
+            smb_username=smb_username.strip() or None,
+            smb_password=smb_password or None,
+        )
+    except RuntimeError as exc:
+        return RedirectResponse(url=f"/ui/csb-merp?asset_id={asset_id}&base_path={base_path}&msg={str(exc)}", status_code=303)
+    msg = f"Imported: accepted={summary.events_accepted}, parsed={summary.lines_parsed}, files={summary.files_processed}/{summary.files_found}"
+    base = f"/ui/csb-merp?asset_id={asset_id}&base_path={base_path}&glob_pattern={glob_pattern}&max_files={max_files}&msg={msg}"
+    if recursive:
+        base += "&recursive=true"
+    return RedirectResponse(url=base, status_code=303)
 
 
 def _worker_health_snapshot() -> dict[str, int | str | bool]:
@@ -2597,7 +2920,7 @@ def dashboard(
       <div class='topbar'>
         <div><b>InfraMind Monitor</b></div>
         <div class='nav'>
-          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/ai'>AI Analytics</a><a href='/ui/ai/policies'>AI Policies</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
+          <a href='/ui/assets'>Assets</a><a href='/ui/events'>Events</a><a href='/ui/csb-merp'>CSB MERP</a><a href='/ui/ai'>AI Analytics</a><a href='/ui/ai/policies'>AI Policies</a><a id='nav-collectors' href='/ui/collectors'>Collectors</a><a id='nav-diagnostics' href='/ui/diagnostics'>Diagnostics</a><a href='/ui/auth'>Auth</a><a href='/ui/compliance'>Compliance</a>
         </div>
       </div>
       <div class='container' id='dashboard-root' data-api='/dashboard/data' data-period-days='{payload["filters"]["period_days"]}' data-asset-id='{payload["filters"]["asset_id"]}' data-source='{payload["filters"]["source"]}' data-role='{payload["role"]}' data-tenant-id='{payload["filters"].get("tenant_id","")}'>
@@ -2742,6 +3065,43 @@ def register_events_batch(request: Request, batch: EventBatch, _role: str = Depe
 
     return IngestSummary(accepted=accepted)
 
+
+
+
+@app.post("/ingest/csb-merp", response_model=CsbMerpIngestSummary)
+def ingest_csb_merp_logs(request: Request, payload: CsbMerpIngestRequest, _role: str = Depends(_require_operator_dependency)) -> CsbMerpIngestSummary:
+    if not _asset_exists(payload.asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    try:
+        return _ingest_csb_merp_from_path(
+            asset_id=payload.asset_id,
+            base_path=payload.base_path,
+            recursive=payload.recursive,
+            glob_pattern=payload.glob_pattern,
+            max_files=payload.max_files,
+            smb_username=payload.smb_username,
+            smb_password=payload.smb_password,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/assets/{asset_id}/csb-merp/report", response_model=CsbMerpReport)
+def get_csb_merp_report(
+    request: Request,
+    asset_id: str,
+    sscc: str | None = None,
+    script: str | None = None,
+    user: str | None = None,
+    limit: int = 3000,
+    tenant_id: str | None = None,
+) -> CsbMerpReport:
+    if not _asset_exists(asset_id):
+        raise HTTPException(status_code=404, detail="Asset not found")
+    tenant_scope = _resolve_tenant_scope(request, tenant_id)
+    if not _asset_in_tenant(asset_id, tenant_scope):
+        raise HTTPException(status_code=403, detail="Asset is out of tenant scope")
+    return _build_csb_merp_report(asset_id=asset_id, sscc=sscc, script=script, user=user, limit=limit)
 
 @app.get("/assets/{asset_id}/events", response_model=list[Event])
 def list_events(request: Request, asset_id: str, tenant_id: str | None = None) -> list[Event]:
