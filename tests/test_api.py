@@ -816,6 +816,69 @@ def test_ilo_pull_autodiscovers_entries_path_on_404() -> None:
     assert any(call[0].endswith('/redfish/v1/Systems') for call in DummyClient.calls)
     assert any(call[0].endswith('/LogServices/IEL/Entries') for call in DummyClient.calls)
 
+
+
+def test_ilo_pull_hydrates_member_links_when_entries_are_not_expanded() -> None:
+    class DummyResponse:
+        def __init__(self, status_code=200, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text if text else ("{}" if payload is not None else "")
+            self.headers = {"content-type": "application/json"}
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no json")
+            return self._payload
+
+    class DummyClient:
+        calls = []
+
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.calls.append((endpoint, params))
+            if endpoint.endswith('/redfish/v1/Systems/1/LogServices/IML/Entries'):
+                return DummyResponse(payload={"Members": [{"@odata.id": "/redfish/v1/Systems/1/LogServices/IML/Entries/51"}]})
+            if endpoint.endswith('/redfish/v1/Systems/1/LogServices/IML/Entries/51'):
+                return DummyResponse(payload={"Id": "51", "Severity": "Warning", "Message": "Fan degraded"})
+            return DummyResponse(status_code=404, text='Unknown path')
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-links", "name": "bmc-links", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-links",
+            name="ilo links",
+            address="10.0.0.81",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-links",
+            ilo_use_https=True,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, None)
+    assert len(rows) == 1
+    assert rows[0]["Message"] == "Fan degraded"
+    assert cursor == "51"
+
 def test_ilo_pull_reports_connection_refused_with_hint() -> None:
     class DummyClient:
         def __init__(self, timeout, verify, auth):

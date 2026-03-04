@@ -416,7 +416,6 @@ class AgentlessWorker:
                     source="ilo_iml",
                     message=f"[iLO] Entry={entry_id} Created={created} Severity={row.get('Severity', 'Unknown')} :: {message}",
                     severity=severity,
-                    timestamp=self._parse_event_timestamp(created) or datetime.utcnow(),
                 )
             )
 
@@ -975,7 +974,48 @@ $events | ConvertTo-Json -Depth 4 -Compress
             )
 
         members = payload.get("Members") if isinstance(payload, dict) else None
+        if not isinstance(members, list):
+            alt_members = payload.get("Items") or payload.get("items") or payload.get("value")
+            members = alt_members if isinstance(alt_members, list) else []
         rows = members if isinstance(members, list) else []
+
+        # Some iLO Redfish implementations return collection members as links only
+        # (e.g. {"@odata.id": ".../Entries/<N>"}). Hydrate those links to get event fields.
+        needs_hydration = bool(rows) and all(
+            isinstance(r, dict)
+            and "@odata.id" in r
+            and "Message" not in r
+            and "Severity" not in r
+            and "Id" not in r
+            for r in rows
+        )
+        if needs_hydration:
+            hydrated: list[dict] = []
+            try:
+                import httpx
+
+                with httpx.Client(
+                    timeout=self.timeout_sec,
+                    verify=target.ilo_validate_tls,
+                    auth=httpx.BasicAuth(target.username, target.password),
+                ) as client:
+                    for item in rows[:request_limit]:
+                        ref = str(item.get("@odata.id") or "").strip()
+                        if not ref.startswith("/"):
+                            continue
+                        try:
+                            ent_resp = client.get(_full_url(ref))
+                            if ent_resp.status_code >= 400:
+                                continue
+                            ent_payload = ent_resp.json()
+                            if isinstance(ent_payload, dict):
+                                hydrated.append(ent_payload)
+                        except Exception:
+                            continue
+            except Exception:
+                hydrated = []
+            if hydrated:
+                rows = hydrated
 
         cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
         filtered: list[dict] = []
