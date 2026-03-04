@@ -734,6 +734,58 @@ def test_ilo_pull_reports_connection_refused_with_hint() -> None:
 
 
 
+
+
+def test_ilo_pull_empty_success_response_is_treated_as_no_data() -> None:
+    class DummyResponse:
+        status_code = 200
+        text = ""
+        headers = {"content-type": "text/plain"}
+
+        @staticmethod
+        def json():
+            raise AssertionError("json() should not be called for empty body")
+
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-empty", "name": "bmc-empty", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-empty",
+            name="ilo empty",
+            address="10.0.0.62",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-empty",
+            ilo_use_https=True,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, "7")
+    assert rows == []
+    assert cursor == "7"
+
 def test_ilo_pull_reports_non_json_response_with_hint() -> None:
     class DummyResponse:
         status_code = 200

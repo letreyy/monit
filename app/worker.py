@@ -874,6 +874,12 @@ $events | ConvertTo-Json -Depth 4 -Compress
         if response.status_code >= 400:
             raise RuntimeError(f"Redfish HTTP {response.status_code}: {response.text[:200].strip()}")
 
+        raw_text = getattr(response, "text", None)
+        raw_body = str(raw_text or "").strip() if raw_text is not None else None
+        if response.status_code == 204 or (raw_body is not None and not raw_body):
+            cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
+            return [], str(cursor)
+
         try:
             payload = response.json()
         except Exception as exc:
