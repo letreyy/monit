@@ -849,13 +849,18 @@ $events | ConvertTo-Json -Depth 4 -Compress
             path = "/" + path
         endpoint = f"{scheme}://{target.address}:{target.port}{path}"
 
+        request_limit = max(1, min(target.ilo_event_limit, 500))
+        is_initial_pull = not (last_cursor and str(last_cursor).strip())
+        if is_initial_pull:
+            request_limit = max(request_limit, 100)
+
         try:
             with httpx.Client(
                 timeout=self.timeout_sec,
                 verify=target.ilo_validate_tls,
                 auth=httpx.BasicAuth(target.username, target.password),
             ) as client:
-                response = client.get(endpoint, params={"$top": max(1, min(target.ilo_event_limit, 500))})
+                response = client.get(endpoint, params={"$top": request_limit})
         except Exception as exc:
             message = str(exc)
             name = exc.__class__.__name__

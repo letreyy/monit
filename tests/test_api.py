@@ -690,6 +690,61 @@ def test_ilo_redfish_pull_with_mock() -> None:
 
 
 
+
+
+def test_ilo_initial_pull_requests_at_least_100_entries() -> None:
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"Members": [{"Id": "5", "Severity": "OK", "Message": "ok"}]}
+
+    class DummyClient:
+        last_params = None
+
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.last_params = params
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-init", "name": "bmc-init", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-init",
+            name="ilo init",
+            address="10.0.0.70",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-init",
+            ilo_use_https=True,
+            ilo_event_limit=20,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, None)
+    assert rows
+    assert cursor == "5"
+    assert DummyClient.last_params == {"$top": 100}
+
 def test_ilo_pull_reports_connection_refused_with_hint() -> None:
     class DummyClient:
         def __init__(self, timeout, verify, auth):
