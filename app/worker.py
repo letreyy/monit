@@ -870,53 +870,71 @@ $events | ConvertTo-Json -Depth 4 -Compress
             return f"{scheme}://{target.address}:{target.port}{relative_path}"
 
         def _discover_entries_path(client: object) -> str | None:
-            try:
-                systems_resp = client.get(_full_url("/redfish/v1/Systems"))
-                systems_payload = systems_resp.json() if systems_resp.status_code < 400 else {}
-            except Exception:
-                return None
-            members = systems_payload.get("Members") if isinstance(systems_payload, dict) else None
-            if not isinstance(members, list):
-                return None
-            for system in members:
-                system_path = ""
-                if isinstance(system, dict):
-                    system_path = str(system.get("@odata.id") or "").strip()
-                if not system_path.startswith("/"):
-                    continue
-                logservices_path = f"{system_path.rstrip('/')}/LogServices"
+            for systems_root in ("/redfish/v1/Systems", "/rest/v1/Systems"):
                 try:
-                    ls_resp = client.get(_full_url(logservices_path))
-                    ls_payload = ls_resp.json() if ls_resp.status_code < 400 else {}
+                    systems_resp = client.get(_full_url(systems_root))
+                    systems_payload = systems_resp.json() if systems_resp.status_code < 400 else {}
                 except Exception:
                     continue
-                ls_members = ls_payload.get("Members") if isinstance(ls_payload, dict) else None
-                if not isinstance(ls_members, list):
+                members = systems_payload.get("Members") if isinstance(systems_payload, dict) else None
+                if not isinstance(members, list):
+                    members = systems_payload.get("Items") if isinstance(systems_payload, dict) else None
+                if not isinstance(members, list):
                     continue
-                for service in ls_members:
-                    service_path = ""
-                    if isinstance(service, dict):
-                        service_path = str(service.get("@odata.id") or "").strip()
-                    if not service_path.startswith("/"):
+
+                for system in members:
+                    system_path = ""
+                    if isinstance(system, dict):
+                        system_path = str(system.get("@odata.id") or "").strip()
+                    if not system_path.startswith("/"):
                         continue
+
+                    logservices_path = f"{system_path.rstrip('/')}/LogServices"
                     try:
-                        svc_resp = client.get(_full_url(service_path))
-                        svc_payload = svc_resp.json() if svc_resp.status_code < 400 else {}
-                    except Exception:
-                        svc_payload = {}
-                    entries_path = ""
-                    if isinstance(svc_payload, dict):
-                        entries = svc_payload.get("Entries")
-                        if isinstance(entries, dict):
-                            entries_path = str(entries.get("@odata.id") or "").strip()
-                    if not entries_path.startswith("/"):
-                        entries_path = f"{service_path.rstrip('/')}/Entries"
-                    try:
-                        probe = client.get(_full_url(entries_path), params={"$top": 1})
-                        if probe.status_code < 400:
-                            return entries_path
+                        ls_resp = client.get(_full_url(logservices_path))
+                        ls_payload = ls_resp.json() if ls_resp.status_code < 400 else {}
                     except Exception:
                         continue
+
+                    ls_members = ls_payload.get("Members") if isinstance(ls_payload, dict) else None
+                    if not isinstance(ls_members, list):
+                        ls_members = ls_payload.get("Items") if isinstance(ls_payload, dict) else None
+                    if not isinstance(ls_members, list):
+                        continue
+
+                    for service in ls_members:
+                        service_path = ""
+                        if isinstance(service, dict):
+                            service_path = str(service.get("@odata.id") or "").strip()
+                        if not service_path.startswith("/"):
+                            continue
+                        try:
+                            svc_resp = client.get(_full_url(service_path))
+                            svc_payload = svc_resp.json() if svc_resp.status_code < 400 else {}
+                        except Exception:
+                            svc_payload = {}
+
+                        entries_path = ""
+                        if isinstance(svc_payload, dict):
+                            entries = svc_payload.get("Entries")
+                            if isinstance(entries, dict):
+                                entries_path = str(entries.get("@odata.id") or "").strip()
+                        if not entries_path.startswith("/"):
+                            entries_path = f"{service_path.rstrip('/')}/Entries"
+                        try:
+                            probe = client.get(_full_url(entries_path), params={"$top": 1})
+                            if probe.status_code < 400:
+                                return entries_path
+                        except Exception:
+                            continue
+            return None
+
+        def _legacy_alt_path(pth: str) -> str | None:
+            normalized = pth.strip()
+            if normalized.startswith("/redfish/v1/"):
+                return "/rest/v1/" + normalized[len("/redfish/v1/"):]
+            if normalized.startswith("/rest/v1/"):
+                return "/redfish/v1/" + normalized[len("/rest/v1/"):]
             return None
 
         endpoint = _full_url(path)
@@ -928,8 +946,18 @@ $events | ConvertTo-Json -Depth 4 -Compress
             ) as client:
                 response = client.get(endpoint, params={"$top": request_limit})
                 if response.status_code == 404:
+                    legacy_path = _legacy_alt_path(path)
+                    if legacy_path and legacy_path != path:
+                        legacy_endpoint = _full_url(legacy_path)
+                        legacy_resp = client.get(legacy_endpoint, params={"$top": request_limit})
+                        if legacy_resp.status_code < 400:
+                            path = legacy_path
+                            endpoint = legacy_endpoint
+                            response = legacy_resp
+                if response.status_code == 404:
                     discovered_path = _discover_entries_path(client)
                     if discovered_path and discovered_path != path:
+                        path = discovered_path
                         endpoint = _full_url(discovered_path)
                         response = client.get(endpoint, params={"$top": request_limit})
         except Exception as exc:

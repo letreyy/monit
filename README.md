@@ -261,7 +261,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
   - WinRM: EventLog pull (`Get-WinEvent`) с курсором.
   - SSH: выполнение команд для метрик + tail логов.
   - SNMP: OID polling с нормализацией в метрики/события.
-  - iLO: Redfish IML pull (`/redfish/v1/.../LogServices/IML/Entries`) с курсором по Id; на первом запуске берутся последние 100 записей (или больше, если `ilo_event_limit` > 100).
+  - iLO: Redfish IML pull (`/redfish/v1/.../LogServices/IML/Entries`) с курсором по Id; на первом запуске берутся последние 100 записей (или больше, если `ilo_event_limit` > 100). При `404` коллектор автоматически пробует legacy-путь `/rest/v1/...` и fallback-discovery.
 - Для collector targets доступны профили (порты/команды/OID/WinRM options и т.д.).
 
 

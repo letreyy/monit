@@ -747,6 +747,70 @@ def test_ilo_initial_pull_requests_at_least_100_entries() -> None:
 
 
 
+
+
+def test_ilo_pull_retries_legacy_rest_v1_path_on_404() -> None:
+    class DummyResponse:
+        def __init__(self, status_code=200, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text if text else ("{}" if payload is not None else "")
+            self.headers = {"content-type": "application/json"}
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no json")
+            return self._payload
+
+    class DummyClient:
+        calls = []
+
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.calls.append((endpoint, params))
+            if endpoint.endswith('/redfish/v1/Systems/1/LogServices/IML/Entries'):
+                return DummyResponse(status_code=404, text='Not Found')
+            if endpoint.endswith('/rest/v1/Systems/1/LogServices/IML/Entries'):
+                return DummyResponse(payload={"Members": [{"Id": "19", "Severity": "Warning", "Message": "Temp high"}]})
+            return DummyResponse(status_code=404, text='Unknown path')
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-rest", "name": "bmc-rest", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-rest",
+            name="ilo rest",
+            address="10.0.0.82",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-rest",
+            ilo_use_https=True,
+            ilo_log_path="/redfish/v1/Systems/1/LogServices/IML/Entries",
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, None)
+    assert len(rows) == 1
+    assert cursor == "19"
+    assert any(call[0].endswith('/rest/v1/Systems/1/LogServices/IML/Entries') for call in DummyClient.calls)
+
 def test_ilo_pull_autodiscovers_entries_path_on_404() -> None:
     class DummyResponse:
         def __init__(self, status_code=200, payload=None, text=""):
