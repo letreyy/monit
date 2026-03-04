@@ -248,7 +248,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 
 ### 2) Ingestion и API
 - REST API для ассетов, событий, batch-ingest и обзорной статистики.
-- UI-формы для управления ассетами/событиями/коллекторами (create/update через один form-flow; для collector target показываются только поля выбранного типа: WinRM/SSH/SNMP).
+- UI-формы для управления ассетами/событиями/коллекторами (create/update через один form-flow; для collector target показываются только поля выбранного типа: WinRM/SSH/SNMP/iLO).
 - UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
 - UI-страница AI analytics center (`/ui/ai`) с overview по ассетам, incident brief по выбранному asset, cross-asset incident briefs (JSON/CSV quick-links), таблицей explainable аномалий, блоком explainable runbook hints, dependency map по выбранному asset и cross-asset dependency hotspots.
 - UI-страница CSB MERP log center (`/ui/csb-merp`) с импортом txt-логов из смонтированной Windows/SMB шары и фильтрами цепочки по SSCC/скрипту/пользователю.
@@ -256,12 +256,28 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
 ### 3) Agentless collectors
-- Поддержаны протоколы `winrm`, `ssh`, `snmp`.
+- Поддержаны протоколы `winrm`, `ssh`, `snmp`, `ilo` (Redfish для HPE iLO).
 - Реальные pull-paths:
   - WinRM: EventLog pull (`Get-WinEvent`) с курсором.
   - SSH: выполнение команд для метрик + tail логов.
   - SNMP: OID polling с нормализацией в метрики/события.
+  - iLO: Redfish IML pull (`/redfish/v1/.../LogServices/IML/Entries`) с курсором по Id; на первом запуске берутся последние 100 записей (или больше, если `ilo_event_limit` > 100). При `404` коллектор автоматически пробует legacy-путь `/rest/v1/...` и fallback-discovery.
 - Для collector targets доступны профили (порты/команды/OID/WinRM options и т.д.).
+
+
+#### Как узнать корректный Redfish путь IML/Entries на своём iLO
+Если стандартный путь не подходит, можно пройтись по API вручную:
+1. `GET /redfish/v1/Systems` — получить список систем и их `@odata.id`.
+2. Для нужной системы: `GET <System@odata.id>/LogServices` — список сервисов логов (`IML`, `IEL` и т.п.).
+3. Для сервиса: `GET <LogService@odata.id>` — взять `Entries.@odata.id`.
+4. Этот путь и указывайте в поле `ilo_log_path` (например, `/redfish/v1/Systems/437XR1138R2/LogServices/IEL/Entries`).
+
+Пример (замените host/user/pass):
+```bash
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems | jq '.Members[]."@odata.id"'
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems/<ID>/LogServices | jq '.Members[]."@odata.id"'
+curl -k -u user:pass https://ILO_HOST/redfish/v1/Systems/<ID>/LogServices/<LOG_ID> | jq '.Entries."@odata.id"'
+```
 
 ### 4) Worker и диагностика
 - Фоновый worker на lifecycle FastAPI (`lifespan`) с ручным `run-once`.
