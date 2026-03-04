@@ -248,7 +248,7 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 
 ### 2) Ingestion и API
 - REST API для ассетов, событий, batch-ingest и обзорной статистики.
-- UI-формы для управления ассетами/событиями/коллекторами (create/update через один form-flow; для collector target показываются только поля выбранного типа: WinRM/SSH/SNMP).
+- UI-формы для управления ассетами/событиями/коллекторами (create/update через один form-flow; для collector target показываются только поля выбранного типа: WinRM/SSH/SNMP/iLO).
 - UI-страницы для auth/compliance-операций (login/logout session, run report, purge, deliveries/status) без прямых вызовов API вручную.
 - UI-страница AI analytics center (`/ui/ai`) с overview по ассетам, incident brief по выбранному asset, cross-asset incident briefs (JSON/CSV quick-links), таблицей explainable аномалий, блоком explainable runbook hints, dependency map по выбранному asset и cross-asset dependency hotspots.
 - UI-страница CSB MERP log center (`/ui/csb-merp`) с импортом txt-логов из смонтированной Windows/SMB шары и фильтрами цепочки по SSCC/скрипту/пользователю.
@@ -256,11 +256,12 @@ python scripts/agent.py --api http://127.0.0.1:8050 --asset-id srv-01 --interval
 - Dashboard и diagnostics с JSON data endpoints, фильтрами и автообновлением.
 
 ### 3) Agentless collectors
-- Поддержаны протоколы `winrm`, `ssh`, `snmp`.
+- Поддержаны протоколы `winrm`, `ssh`, `snmp`, `ilo` (Redfish для HPE iLO).
 - Реальные pull-paths:
   - WinRM: EventLog pull (`Get-WinEvent`) с курсором.
   - SSH: выполнение команд для метрик + tail логов.
   - SNMP: OID polling с нормализацией в метрики/события.
+  - iLO: Redfish IML pull (`/redfish/v1/.../LogServices/IML/Entries`) с курсором по Id.
 - Для collector targets доступны профили (порты/команды/OID/WinRM options и т.д.).
 
 ### 4) Worker и диагностика
