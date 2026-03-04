@@ -1054,7 +1054,7 @@ def ui_collectors(edit_id: str = "") -> str:
     form_enabled = edit_target.enabled if edit_target else True
     form_ilo_use_https = edit_target.ilo_use_https if edit_target else True
     form_ilo_validate_tls = edit_target.ilo_validate_tls if edit_target else False
-    form_ilo_log_path = edit_target.ilo_log_path if edit_target else "/redfish/v1/Systems/1/LogServices/IML/Entries"
+    form_ilo_log_path = edit_target.ilo_log_path if edit_target else "/rest/v1/Systems/1/LogServices/IML/Entries"
     form_ilo_event_limit = edit_target.ilo_event_limit if edit_target else 50
     form_csb_share_path = edit_target.csb_share_path if edit_target else ""
     form_csb_glob_pattern = edit_target.csb_glob_pattern if edit_target else "*.txt"
@@ -1205,7 +1205,7 @@ def ui_collectors_submit(
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
     ilo_use_https: str | None = Form(None),
     ilo_validate_tls: str | None = Form(None),
-    ilo_log_path: str = Form("/redfish/v1/Systems/1/LogServices/IML/Entries"),
+    ilo_log_path: str = Form("/rest/v1/Systems/1/LogServices/IML/Entries"),
     ilo_event_limit: int = Form(50),
     csb_share_path: str = Form(""),
     csb_glob_pattern: str = Form("*.txt"),
@@ -1243,7 +1243,7 @@ def ui_collectors_submit(
         snmp_oids=snmp_oids.strip() or "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
         ilo_use_https=ilo_use_https is not None,
         ilo_validate_tls=ilo_validate_tls is not None,
-        ilo_log_path=ilo_log_path.strip() or "/redfish/v1/Systems/1/LogServices/IML/Entries",
+        ilo_log_path=ilo_log_path.strip() or "/rest/v1/Systems/1/LogServices/IML/Entries",
         ilo_event_limit=max(1, min(ilo_event_limit, 500)),
         csb_share_path=csb_share_path.strip(),
         csb_glob_pattern=csb_glob_pattern.strip() or "*.txt",

@@ -857,7 +857,7 @@ $events | ConvertTo-Json -Depth 4 -Compress
         import httpx
 
         scheme = "https" if target.ilo_use_https else "http"
-        path = target.ilo_log_path.strip() or "/redfish/v1/Systems/1/LogServices/IML/Entries"
+        path = target.ilo_log_path.strip() or "/rest/v1/Systems/1/LogServices/IML/Entries"
         if not path.startswith("/"):
             path = "/" + path
 

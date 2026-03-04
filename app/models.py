@@ -56,7 +56,7 @@ class CollectorTarget(BaseModel):
     snmp_oids: str = "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"
     ilo_use_https: bool = True
     ilo_validate_tls: bool = False
-    ilo_log_path: str = "/redfish/v1/Systems/1/LogServices/IML/Entries"
+    ilo_log_path: str = "/rest/v1/Systems/1/LogServices/IML/Entries"
     ilo_event_limit: int = Field(default=50, ge=1, le=500)
     csb_share_path: str = ""
     csb_glob_pattern: str = "*.txt"

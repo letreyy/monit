@@ -75,7 +75,7 @@ class SQLiteStorage:
                     snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0',
                     ilo_use_https INTEGER NOT NULL DEFAULT 1,
                     ilo_validate_tls INTEGER NOT NULL DEFAULT 0,
-                    ilo_log_path TEXT NOT NULL DEFAULT '/redfish/v1/Systems/1/LogServices/IML/Entries',
+                    ilo_log_path TEXT NOT NULL DEFAULT '/rest/v1/Systems/1/LogServices/IML/Entries',
                     ilo_event_limit INTEGER NOT NULL DEFAULT 50,
                     csb_share_path TEXT NOT NULL DEFAULT '',
                     csb_glob_pattern TEXT NOT NULL DEFAULT '*.txt',
@@ -226,7 +226,7 @@ class SQLiteStorage:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN ilo_validate_tls INTEGER NOT NULL DEFAULT 0")
         if "ilo_log_path" not in columns:
             conn.execute(
-                "ALTER TABLE collector_targets ADD COLUMN ilo_log_path TEXT NOT NULL DEFAULT '/redfish/v1/Systems/1/LogServices/IML/Entries'"
+                "ALTER TABLE collector_targets ADD COLUMN ilo_log_path TEXT NOT NULL DEFAULT '/rest/v1/Systems/1/LogServices/IML/Entries'"
             )
         if "ilo_event_limit" not in columns:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN ilo_event_limit INTEGER NOT NULL DEFAULT 50")
