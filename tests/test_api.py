@@ -3092,3 +3092,56 @@ def test_worker_collects_csb_merp_unc_share(monkeypatch: pytest.MonkeyPatch) -> 
     assert run.status_code == 200
     events = client.get("/assets/merp-unc-worker/events").json()
     assert any(e["source"] == "csb_merp_txt" and "SYS+MESSAGE" in e["message"] for e in events)
+
+
+def test_asset_detail_correlation_link_filters_matching_events() -> None:
+    client.post(
+        "/assets",
+        json={"id": "srv-corr", "name": "srv-corr", "asset_type": "server", "location": "R2"},
+    )
+    for idx in range(3):
+        client.post(
+            "/ingest/events",
+            json={
+                "events": [
+                    {
+                        "asset_id": "srv-corr",
+                        "source": "windows_eventlog",
+                        "message": f"disk error EventID=153 block={idx}",
+                        "severity": "warning",
+                    }
+                ]
+            },
+        )
+
+    client.post(
+        "/ingest/events",
+        json={
+            "events": [
+                {
+                    "asset_id": "srv-corr",
+                    "source": "windows_eventlog",
+                    "message": "EventID=4625 failed login attempt",
+                    "severity": "warning",
+                },
+                {
+                    "asset_id": "srv-corr",
+                    "source": "linux_syslog",
+                    "message": "unrelated warning",
+                    "severity": "info",
+                },
+            ]
+        },
+    )
+
+    page = client.get("/ui/assets/srv-corr")
+    assert page.status_code == 200
+    assert "correlation=Windows+storage+error+cluster" in page.text
+    assert "Windows storage error cluster (3 events)" in page.text
+
+    filtered = client.get("/ui/assets/srv-corr?correlation=Windows+storage+error+cluster")
+    assert filtered.status_code == 200
+    assert "Correlation events: Windows storage error cluster (3)" in filtered.text
+    assert filtered.text.count("disk error EventID=153") == 3
+    assert "EventID=4625 failed login attempt" not in filtered.text
+    assert "unrelated warning" not in filtered.text
