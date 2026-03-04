@@ -73,6 +73,10 @@ class SQLiteStorage:
                     snmp_community TEXT NOT NULL DEFAULT 'public',
                     snmp_version TEXT NOT NULL DEFAULT '2c',
                     snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0',
+                    ilo_use_https INTEGER NOT NULL DEFAULT 1,
+                    ilo_validate_tls INTEGER NOT NULL DEFAULT 0,
+                    ilo_log_path TEXT NOT NULL DEFAULT '/redfish/v1/Systems/1/LogServices/IML/Entries',
+                    ilo_event_limit INTEGER NOT NULL DEFAULT 50,
                     csb_share_path TEXT NOT NULL DEFAULT '',
                     csb_glob_pattern TEXT NOT NULL DEFAULT '*.txt',
                     csb_recursive INTEGER NOT NULL DEFAULT 1,
@@ -216,6 +220,16 @@ class SQLiteStorage:
             conn.execute(
                 "ALTER TABLE collector_targets ADD COLUMN snmp_oids TEXT NOT NULL DEFAULT '1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0'"
             )
+        if "ilo_use_https" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN ilo_use_https INTEGER NOT NULL DEFAULT 1")
+        if "ilo_validate_tls" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN ilo_validate_tls INTEGER NOT NULL DEFAULT 0")
+        if "ilo_log_path" not in columns:
+            conn.execute(
+                "ALTER TABLE collector_targets ADD COLUMN ilo_log_path TEXT NOT NULL DEFAULT '/redfish/v1/Systems/1/LogServices/IML/Entries'"
+            )
+        if "ilo_event_limit" not in columns:
+            conn.execute("ALTER TABLE collector_targets ADD COLUMN ilo_event_limit INTEGER NOT NULL DEFAULT 50")
         if "csb_share_path" not in columns:
             conn.execute("ALTER TABLE collector_targets ADD COLUMN csb_share_path TEXT NOT NULL DEFAULT ''")
         if "csb_glob_pattern" not in columns:
@@ -271,9 +285,10 @@ class SQLiteStorage:
                     winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
                     ssh_metrics_command, ssh_log_path, ssh_tail_lines,
                     snmp_community, snmp_version, snmp_oids,
+                    ilo_use_https, ilo_validate_tls, ilo_log_path, ilo_event_limit,
                     csb_share_path, csb_glob_pattern, csb_recursive, csb_max_files, csb_source
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
                     address=excluded.address,
@@ -295,6 +310,10 @@ class SQLiteStorage:
                     snmp_community=excluded.snmp_community,
                     snmp_version=excluded.snmp_version,
                     snmp_oids=excluded.snmp_oids,
+                    ilo_use_https=excluded.ilo_use_https,
+                    ilo_validate_tls=excluded.ilo_validate_tls,
+                    ilo_log_path=excluded.ilo_log_path,
+                    ilo_event_limit=excluded.ilo_event_limit,
                     csb_share_path=excluded.csb_share_path,
                     csb_glob_pattern=excluded.csb_glob_pattern,
                     csb_recursive=excluded.csb_recursive,
@@ -323,6 +342,10 @@ class SQLiteStorage:
                     self.secret_codec.encrypt(target.snmp_community),
                     target.snmp_version,
                     target.snmp_oids,
+                    1 if target.ilo_use_https else 0,
+                    1 if target.ilo_validate_tls else 0,
+                    target.ilo_log_path,
+                    target.ilo_event_limit,
                     target.csb_share_path,
                     target.csb_glob_pattern,
                     1 if target.csb_recursive else 0,
@@ -348,6 +371,7 @@ class SQLiteStorage:
                        winrm_transport, winrm_use_https, winrm_validate_tls, winrm_event_logs, winrm_batch_size,
                        ssh_metrics_command, ssh_log_path, ssh_tail_lines,
                        snmp_community, snmp_version, snmp_oids,
+                       ilo_use_https, ilo_validate_tls, ilo_log_path, ilo_event_limit,
                        csb_share_path, csb_glob_pattern, csb_recursive, csb_max_files, csb_source
                 FROM collector_targets
                 ORDER BY id
@@ -360,6 +384,8 @@ class SQLiteStorage:
             data["enabled"] = bool(data["enabled"])
             data["winrm_use_https"] = bool(data["winrm_use_https"])
             data["winrm_validate_tls"] = bool(data["winrm_validate_tls"])
+            data["ilo_use_https"] = bool(data["ilo_use_https"])
+            data["ilo_validate_tls"] = bool(data["ilo_validate_tls"])
             data["csb_recursive"] = bool(data["csb_recursive"])
             data["password"] = self.secret_codec.decrypt(data["password"])
             data["snmp_community"] = self.secret_codec.decrypt(data["snmp_community"])
