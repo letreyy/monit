@@ -139,6 +139,8 @@ class AgentlessWorker:
             return self._collect_ssh_target(target)
         if target.collector_type.value == "snmp":
             return self._collect_snmp_target(target)
+        if target.collector_type.value == "ilo":
+            return self._collect_ilo_target(target)
         return self._collect_csb_merp_share_target(target)
 
     def _collect_winrm_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
@@ -338,6 +340,78 @@ class AgentlessWorker:
                     asset_id=target.asset_id,
                     source="agentless_snmp",
                     message=f"[snmp] no data for '{target.name}', cursor={next_cursor}",
+                    severity=Severity.info,
+                )
+            )
+
+        state = CollectorState(
+            target_id=target.id,
+            last_success_ts=current_ts,
+            last_run_ts=current_ts,
+            last_error=None,
+            last_cursor=next_cursor,
+            failure_streak=0,
+        )
+        return events, state
+
+
+    def _collect_ilo_target(self, target: CollectorTarget) -> tuple[list[Event], CollectorState]:
+        prev = self.service.get_collector_state(target.id)
+        current_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+        try:
+            rows, next_cursor = self._pull_ilo_redfish_events(target, prev.last_cursor)
+        except Exception as exc:
+            streak = prev.failure_streak + 1
+            state = CollectorState(
+                target_id=target.id,
+                last_success_ts=prev.last_success_ts,
+                last_run_ts=current_ts,
+                last_error=f"ilo pull failed: {exc}",
+                last_cursor=prev.last_cursor,
+                failure_streak=streak,
+            )
+            severity = Severity.critical if streak >= 3 else Severity.warning
+            return (
+                [
+                    Event(
+                        asset_id=target.asset_id,
+                        source="agentless_ilo",
+                        message=f"[ilo] pull failed for '{target.name}': {exc}",
+                        metric="collector_failure_streak",
+                        value=float(streak),
+                        severity=severity,
+                    )
+                ],
+                state,
+            )
+
+        events: list[Event] = []
+        for row in rows:
+            sev_raw = str(row.get("Severity", "")).lower()
+            severity = Severity.info
+            if "warn" in sev_raw or "caution" in sev_raw:
+                severity = Severity.warning
+            if "crit" in sev_raw or "fatal" in sev_raw:
+                severity = Severity.critical
+            entry_id = row.get("Id") or row.get("EntryCode") or "unknown"
+            created = row.get("Created") or row.get("CreatedTime") or ""
+            message = row.get("Message") or row.get("Name") or "iLO log entry"
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="ilo_iml",
+                    message=f"[iLO] Entry={entry_id} Created={created} Severity={row.get('Severity', 'Unknown')} :: {message}",
+                    severity=severity,
+                )
+            )
+
+        if not events:
+            events.append(
+                Event(
+                    asset_id=target.asset_id,
+                    source="agentless_ilo",
+                    message=f"[ilo] no new IML entries for '{target.name}', cursor={next_cursor}",
                     severity=Severity.info,
                 )
             )
@@ -764,6 +838,78 @@ $events | ConvertTo-Json -Depth 4 -Compress
                 pass
 
         return rows, str(max_cursor)
+
+
+    def _pull_ilo_redfish_events(self, target: CollectorTarget, last_cursor: str | None) -> tuple[list[dict], str]:
+        import httpx
+
+        scheme = "https" if target.ilo_use_https else "http"
+        path = target.ilo_log_path.strip() or "/redfish/v1/Systems/1/LogServices/IML/Entries"
+        if not path.startswith("/"):
+            path = "/" + path
+        endpoint = f"{scheme}://{target.address}:{target.port}{path}"
+
+        try:
+            with httpx.Client(
+                timeout=self.timeout_sec,
+                verify=target.ilo_validate_tls,
+                auth=httpx.BasicAuth(target.username, target.password),
+            ) as client:
+                response = client.get(endpoint, params={"$top": max(1, min(target.ilo_event_limit, 500))})
+        except Exception as exc:
+            message = str(exc)
+            name = exc.__class__.__name__
+            if (
+                name in {"ConnectError", "ConnectTimeout", "ReadTimeout"}
+                or "Connection refused" in message
+                or "Errno 111" in message
+                or "timed out" in message.lower()
+            ):
+                raise RuntimeError(
+                    f"iLO endpoint connection failed: {target.address}:{target.port} ({scheme.upper()}). "
+                    "Check reachability, port and protocol (typical iLO is HTTPS/443)."
+                ) from exc
+            raise
+
+        if response.status_code >= 400:
+            raise RuntimeError(f"Redfish HTTP {response.status_code}: {response.text[:200].strip()}")
+
+        try:
+            payload = response.json()
+        except Exception as exc:
+            body_preview = (response.text or "").strip().replace("\n", " ")[:200]
+            ctype = response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+            raise RuntimeError(
+                "Redfish response is not valid JSON "
+                f"(content-type='{ctype or 'unknown'}', body='{body_preview or '<empty>'}'). "
+                "Check iLO credentials/auth method and Redfish log path."
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"Redfish response must be a JSON object, got {type(payload).__name__}. "
+                "Check iLO log path."
+            )
+
+        members = payload.get("Members") if isinstance(payload, dict) else None
+        rows = members if isinstance(members, list) else []
+
+        cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
+        filtered: list[dict] = []
+        max_cursor = cursor
+        for row in rows:
+            raw_id = row.get("Id")
+            row_id = None
+            try:
+                row_id = int(str(raw_id))
+            except Exception:
+                pass
+            if row_id is None or row_id > cursor:
+                filtered.append(row)
+            if row_id is not None:
+                max_cursor = max(max_cursor, row_id)
+
+        return filtered, str(max_cursor)
 
     @staticmethod
     def _probe_tcp(host: str, port: int, timeout_sec: float) -> ProbeResult:
