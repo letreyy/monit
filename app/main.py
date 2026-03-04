@@ -1050,6 +1050,10 @@ def ui_collectors(edit_id: str = "") -> str:
     form_asset_id = edit_target.asset_id if edit_target else ""
     form_poll_interval = edit_target.poll_interval_sec if edit_target else 60
     form_enabled = edit_target.enabled if edit_target else True
+    form_ilo_use_https = edit_target.ilo_use_https if edit_target else True
+    form_ilo_validate_tls = edit_target.ilo_validate_tls if edit_target else False
+    form_ilo_log_path = edit_target.ilo_log_path if edit_target else "/redfish/v1/Systems/1/LogServices/IML/Entries"
+    form_ilo_event_limit = edit_target.ilo_event_limit if edit_target else 50
     form_csb_share_path = edit_target.csb_share_path if edit_target else ""
     form_csb_glob_pattern = edit_target.csb_glob_pattern if edit_target else "*.txt"
     form_csb_recursive = edit_target.csb_recursive if edit_target else True
@@ -1060,7 +1064,7 @@ def ui_collectors(edit_id: str = "") -> str:
     for c in service.list_collector_targets():
         rows.append(
             f"<tr><td>{c.id}</td><td>{c.name}</td><td>{c.collector_type.value}</td><td>{c.address}:{c.port}</td>"
-            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}; csb={c.csb_share_path}:{c.csb_glob_pattern}</td>"
+            f"<td>{c.username}</td><td>winrm={c.winrm_transport}/logs={c.winrm_event_logs}; ssh_log={c.ssh_log_path}; snmp={c.snmp_version}:{c.snmp_oids}; ilo={c.ilo_log_path} (https={c.ilo_use_https}); csb={c.csb_share_path}:{c.csb_glob_pattern}</td>"
             f"<td>{c.asset_id}</td><td>{'yes' if c.enabled else 'no'}</td>"
             f"<td><a href='/ui/collectors?edit_id={c.id}'>Edit</a> | <form method='post' action='/ui/collectors/{c.id}/delete' style='margin:0;display:inline'><button type='submit'>Delete</button></form></td></tr>"
         )
@@ -1078,6 +1082,7 @@ def ui_collectors(edit_id: str = "") -> str:
             <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
             <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
             <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
+            <option value='ilo' {'selected' if form_type == 'ilo' else ''}>ilo (HPE iLO / Redfish)</option>
             <option value='csb_merp_share' {'selected' if form_type == 'csb_merp_share' else ''}>csb_merp_share (Windows share txt)</option>
           </select>
         </label><br/><br/>
@@ -1120,6 +1125,14 @@ def ui_collectors(edit_id: str = "") -> str:
           <label>SNMP OIDs (comma separated) <input name='snmp_oids' value='1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0' /></label>
         </div>
 
+
+        <div data-collector-scope='ilo' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
+          <b>HPE iLO (Redfish) settings</b><br/><br/>
+          <label>Redfish log path <input name='ilo_log_path' value='{form_ilo_log_path}' style='min-width:360px' /></label><br/><br/>
+          <label>Entries per poll <input name='ilo_event_limit' type='number' value='{form_ilo_event_limit}' min='1' max='500' /></label><br/><br/>
+          <label><input name='ilo_use_https' type='checkbox' {'checked' if form_ilo_use_https else ''} /> Use HTTPS</label><br/><br/>
+          <label><input name='ilo_validate_tls' type='checkbox' {'checked' if form_ilo_validate_tls else ''} /> Validate TLS certificate</label>
+        </div>
         <div data-collector-scope='csb_merp_share' style='display:none;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;margin-bottom:12px'>
           <b>CSB MERP share settings</b><br/><br/>
           <label>Share path (mounted path or UNC like //10.10.10.10/merp/logs) <input name='csb_share_path' value='{form_csb_share_path}' placeholder='/mnt/merp_logs/logs/20260303 or //10.10.10.10/merp/logs' style='min-width:360px' /></label><br/><br/>
@@ -1177,6 +1190,10 @@ def ui_collectors_submit(
     snmp_community: str = Form("public"),
     snmp_version: str = Form("2c"),
     snmp_oids: str = Form("1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0"),
+    ilo_use_https: str | None = Form(None),
+    ilo_validate_tls: str | None = Form(None),
+    ilo_log_path: str = Form("/redfish/v1/Systems/1/LogServices/IML/Entries"),
+    ilo_event_limit: int = Form(50),
     csb_share_path: str = Form(""),
     csb_glob_pattern: str = Form("*.txt"),
     csb_recursive: str | None = Form(None),
@@ -1211,6 +1228,10 @@ def ui_collectors_submit(
         snmp_community=snmp_community,
         snmp_version=snmp_version.strip() or "2c",
         snmp_oids=snmp_oids.strip() or "1.3.6.1.2.1.1.3.0,1.3.6.1.2.1.1.5.0",
+        ilo_use_https=ilo_use_https is not None,
+        ilo_validate_tls=ilo_validate_tls is not None,
+        ilo_log_path=ilo_log_path.strip() or "/redfish/v1/Systems/1/LogServices/IML/Entries",
+        ilo_event_limit=max(1, min(ilo_event_limit, 500)),
         csb_share_path=csb_share_path.strip(),
         csb_glob_pattern=csb_glob_pattern.strip() or "*.txt",
         csb_recursive=csb_recursive is not None,
@@ -2929,7 +2950,8 @@ def ui_diagnostics(
             <option value='' {'selected' if not collector_type else ''}>all</option>
             <option value='winrm' {'selected' if collector_type == 'winrm' else ''}>winrm</option>
             <option value='ssh' {'selected' if collector_type == 'ssh' else ''}>ssh</option>
-            <option value='snmp' {'selected' if collector_type == 'snmp' else ''}>snmp</option>
+                        <option value='snmp' {'selected' if collector_type == 'snmp' else ''}>snmp</option>
+            <option value='ilo' {'selected' if collector_type == 'ilo' else ''}>ilo</option>
           </select>
         </label>
         <label>Error
