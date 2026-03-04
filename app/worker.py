@@ -74,6 +74,18 @@ class AgentlessWorker:
         return rows
 
 
+    @staticmethod
+    def _parse_event_timestamp(raw: object) -> datetime | None:
+        value = str(raw or "").strip()
+        if not value:
+            return None
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
+
     def history(
         self,
         limit: int = 100,
@@ -193,6 +205,7 @@ class AgentlessWorker:
                         f"RecordId={row.get('RecordId', 'Unknown')} Provider={row.get('ProviderName', 'Unknown')} :: {msg}"
                     ),
                     severity=sev,
+                    timestamp=self._parse_event_timestamp(row.get("TimeCreated")) or datetime.utcnow(),
                 )
             )
 
