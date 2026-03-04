@@ -129,9 +129,12 @@ def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
     page = client.get("/ui/collectors")
     assert page.status_code == 200
     assert "id='collector-type-select'" in page.text
+    assert "id='collector-port-input'" in page.text
+    assert "data-default-port='443'" in page.text
     assert "data-collector-scope='winrm'" in page.text
     assert "data-collector-scope='ssh' style='display:none" in page.text
     assert "data-collector-scope='snmp' style='display:none" in page.text
+    assert "data-collector-scope='ilo' style='display:none" in page.text
     assert "data-collector-scope='csb_merp_share' style='display:none" in page.text
     assert "toggleCollectorFields()" in page.text
 
@@ -617,6 +620,349 @@ def test_snmp_pull_uses_oids_with_mock() -> None:
     assert rows[0]["value"] is not None
 
 
+
+
+
+def test_ilo_redfish_pull_with_mock() -> None:
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "Members": [
+                    {"Id": "101", "Severity": "Warning", "Message": "Power supply degraded", "Created": "2026-03-04T08:00:00Z"},
+                    {"Id": "102", "Severity": "Critical", "Message": "Fan failed", "Created": "2026-03-04T08:01:00Z"},
+                ]
+            }
+
+    class DummyClient:
+        last_endpoint = ""
+        last_params = None
+
+        def __init__(self, timeout, verify, auth):
+            self.timeout = timeout
+            self.verify = verify
+            self.auth = auth
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.last_endpoint = endpoint
+            DummyClient.last_params = params
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-01", "name": "bmc-01", "asset_type": "bmc", "location": "R7"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo",
+            name="ilo target",
+            address="10.0.0.50",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-01",
+            ilo_use_https=True,
+            ilo_validate_tls=False,
+            ilo_log_path="/redfish/v1/Systems/1/LogServices/IML/Entries",
+            ilo_event_limit=20,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, "100")
+    assert cursor == "102"
+    assert len(rows) == 2
+    assert DummyClient.last_endpoint.endswith("/redfish/v1/Systems/1/LogServices/IML/Entries")
+    assert DummyClient.last_params == {"$top": 20}
+
+
+
+
+
+def test_ilo_initial_pull_requests_at_least_100_entries() -> None:
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"Members": [{"Id": "5", "Severity": "OK", "Message": "ok"}]}
+
+    class DummyClient:
+        last_params = None
+
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.last_params = params
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-init", "name": "bmc-init", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-init",
+            name="ilo init",
+            address="10.0.0.70",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-init",
+            ilo_use_https=True,
+            ilo_event_limit=20,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, None)
+    assert rows
+    assert cursor == "5"
+    assert DummyClient.last_params == {"$top": 100}
+
+
+
+def test_ilo_pull_autodiscovers_entries_path_on_404() -> None:
+    class DummyResponse:
+        def __init__(self, status_code=200, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text if text else ("{}" if payload is not None else "")
+            self.headers = {"content-type": "application/json"}
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("no json")
+            return self._payload
+
+    class DummyClient:
+        calls = []
+
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            DummyClient.calls.append((endpoint, params))
+            if endpoint.endswith('/redfish/v1/Systems/1/LogServices/IML/Entries'):
+                return DummyResponse(status_code=404, text='Not Found')
+            if endpoint.endswith('/redfish/v1/Systems'):
+                return DummyResponse(payload={"Members": [{"@odata.id": "/redfish/v1/Systems/437XR1138R2"}]})
+            if endpoint.endswith('/redfish/v1/Systems/437XR1138R2/LogServices'):
+                return DummyResponse(payload={"Members": [{"@odata.id": "/redfish/v1/Systems/437XR1138R2/LogServices/IEL"}]})
+            if endpoint.endswith('/redfish/v1/Systems/437XR1138R2/LogServices/IEL'):
+                return DummyResponse(payload={"Entries": {"@odata.id": "/redfish/v1/Systems/437XR1138R2/LogServices/IEL/Entries"}})
+            if endpoint.endswith('/redfish/v1/Systems/437XR1138R2/LogServices/IEL/Entries'):
+                return DummyResponse(payload={"Members": [{"Id": "12", "Severity": "Warning", "Message": "psu warn"}]})
+            return DummyResponse(status_code=404, text='Unknown path')
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-discover", "name": "bmc-discover", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-discover",
+            name="ilo discover",
+            address="10.0.0.80",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-discover",
+            ilo_use_https=True,
+            ilo_log_path="/redfish/v1/Systems/1/LogServices/IML/Entries",
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, None)
+    assert len(rows) == 1
+    assert cursor == "12"
+    assert any(call[0].endswith('/redfish/v1/Systems') for call in DummyClient.calls)
+    assert any(call[0].endswith('/LogServices/IEL/Entries') for call in DummyClient.calls)
+
+def test_ilo_pull_reports_connection_refused_with_hint() -> None:
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            raise RuntimeError("[Errno 111] Connection refused")
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-err", "name": "bmc-err", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-err",
+            name="ilo err",
+            address="10.0.0.60",
+            collector_type=main_module.CollectorType.ilo,
+            port=5985,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-err",
+            ilo_use_https=True,
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_ilo_redfish_events(target, None)
+
+    assert "typical iLO is HTTPS/443" in str(exc.value)
+
+
+
+
+
+def test_ilo_pull_empty_success_response_is_treated_as_no_data() -> None:
+    class DummyResponse:
+        status_code = 200
+        text = ""
+        headers = {"content-type": "text/plain"}
+
+        @staticmethod
+        def json():
+            raise AssertionError("json() should not be called for empty body")
+
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-empty", "name": "bmc-empty", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-empty",
+            name="ilo empty",
+            address="10.0.0.62",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-empty",
+            ilo_use_https=True,
+        )
+    )
+
+    rows, cursor = main_module.worker._pull_ilo_redfish_events(target, "7")
+    assert rows == []
+    assert cursor == "7"
+
+def test_ilo_pull_reports_non_json_response_with_hint() -> None:
+    class DummyResponse:
+        status_code = 200
+        text = "<html>login</html>"
+        headers = {"content-type": "text/html"}
+
+        @staticmethod
+        def json():
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-json", "name": "bmc-json", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-json",
+            name="ilo json",
+            address="10.0.0.61",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-json",
+            ilo_use_https=True,
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_ilo_redfish_events(target, None)
+
+    assert "not valid JSON" in str(exc.value)
+    assert "Check iLO credentials/auth method and Redfish log path" in str(exc.value)
 
 def test_worker_health_endpoint() -> None:
     resp = client.get("/worker/health")
