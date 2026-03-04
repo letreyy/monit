@@ -732,6 +732,60 @@ def test_ilo_pull_reports_connection_refused_with_hint() -> None:
 
     assert "typical iLO is HTTPS/443" in str(exc.value)
 
+
+
+def test_ilo_pull_reports_non_json_response_with_hint() -> None:
+    class DummyResponse:
+        status_code = 200
+        text = "<html>login</html>"
+        headers = {"content-type": "text/html"}
+
+        @staticmethod
+        def json():
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            return DummyResponse()
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-json", "name": "bmc-json", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-json",
+            name="ilo json",
+            address="10.0.0.61",
+            collector_type=main_module.CollectorType.ilo,
+            port=443,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-json",
+            ilo_use_https=True,
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_ilo_redfish_events(target, None)
+
+    assert "not valid JSON" in str(exc.value)
+    assert "Check iLO credentials/auth method and Redfish log path" in str(exc.value)
+
 def test_worker_health_endpoint() -> None:
     resp = client.get("/worker/health")
     assert resp.status_code == 200

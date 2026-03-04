@@ -874,7 +874,23 @@ $events | ConvertTo-Json -Depth 4 -Compress
         if response.status_code >= 400:
             raise RuntimeError(f"Redfish HTTP {response.status_code}: {response.text[:200].strip()}")
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except Exception as exc:
+            body_preview = (response.text or "").strip().replace("\n", " ")[:200]
+            ctype = response.headers.get("content-type", "") if getattr(response, "headers", None) else ""
+            raise RuntimeError(
+                "Redfish response is not valid JSON "
+                f"(content-type='{ctype or 'unknown'}', body='{body_preview or '<empty>'}'). "
+                "Check iLO credentials/auth method and Redfish log path."
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise RuntimeError(
+                f"Redfish response must be a JSON object, got {type(payload).__name__}. "
+                "Check iLO log path."
+            )
+
         members = payload.get("Members") if isinstance(payload, dict) else None
         rows = members if isinstance(members, list) else []
 
