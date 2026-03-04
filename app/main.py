@@ -1079,15 +1079,15 @@ def ui_collectors(edit_id: str = "") -> str:
         <label>Name <input name='name' value='{form_name}' required /></label><br/><br/>
         <label>Type
           <select name='collector_type' id='collector-type-select' onchange='toggleCollectorFields()'>
-            <option value='winrm' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
-            <option value='ssh' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
-            <option value='snmp' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
-            <option value='ilo' {'selected' if form_type == 'ilo' else ''}>ilo (HPE iLO / Redfish)</option>
-            <option value='csb_merp_share' {'selected' if form_type == 'csb_merp_share' else ''}>csb_merp_share (Windows share txt)</option>
+            <option value='winrm' data-default-port='5985' {'selected' if form_type == 'winrm' else ''}>winrm (Windows)</option>
+            <option value='ssh' data-default-port='22' {'selected' if form_type == 'ssh' else ''}>ssh (Linux/Unix)</option>
+            <option value='snmp' data-default-port='161' {'selected' if form_type == 'snmp' else ''}>snmp (Network/Storage)</option>
+            <option value='ilo' data-default-port='443' {'selected' if form_type == 'ilo' else ''}>ilo (HPE iLO / Redfish)</option>
+            <option value='csb_merp_share' data-default-port='445' {'selected' if form_type == 'csb_merp_share' else ''}>csb_merp_share (Windows share txt)</option>
           </select>
         </label><br/><br/>
         <label>Address/IP <input name='address' value='{form_address}' required /></label><br/><br/>
-        <label>Port <input name='port' type='number' value='{form_port}' required /></label><br/><br/>
+        <label>Port <input id='collector-port-input' data-is-edit={'1' if is_edit else '0'} name='port' type='number' value='{form_port}' required /></label><br/><br/>
         <label>Username <input name='username' required /></label><br/><br/>
         <label>Password <input name='password' type='password' required /></label><br/><br/>
 
@@ -1161,6 +1161,17 @@ def ui_collectors(edit_id: str = "") -> str:
           document.querySelectorAll('[data-collector-scope]').forEach((el) => {{
             el.style.display = el.getAttribute('data-collector-scope') === type ? 'block' : 'none';
           }});
+          const portInput = document.getElementById('collector-port-input');
+          const selectedOption = select && select.options ? select.options[select.selectedIndex] : null;
+          const defaultPort = selectedOption ? selectedOption.getAttribute('data-default-port') : '';
+          if (portInput && defaultPort) {{
+            const isEdit = portInput.getAttribute('data-is-edit') === '1';
+            const currentPort = (portInput.value || '').trim();
+            const canAutofill = !isEdit && (!currentPort || ['5985', '22', '161', '443', '445'].includes(currentPort));
+            if (canAutofill) {{
+              portInput.value = defaultPort;
+            }}
+          }}
         }}
         toggleCollectorFields();
       </script>

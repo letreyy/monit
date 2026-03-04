@@ -849,12 +849,27 @@ $events | ConvertTo-Json -Depth 4 -Compress
             path = "/" + path
         endpoint = f"{scheme}://{target.address}:{target.port}{path}"
 
-        with httpx.Client(
-            timeout=self.timeout_sec,
-            verify=target.ilo_validate_tls,
-            auth=httpx.BasicAuth(target.username, target.password),
-        ) as client:
-            response = client.get(endpoint, params={"$top": max(1, min(target.ilo_event_limit, 500))})
+        try:
+            with httpx.Client(
+                timeout=self.timeout_sec,
+                verify=target.ilo_validate_tls,
+                auth=httpx.BasicAuth(target.username, target.password),
+            ) as client:
+                response = client.get(endpoint, params={"$top": max(1, min(target.ilo_event_limit, 500))})
+        except Exception as exc:
+            message = str(exc)
+            name = exc.__class__.__name__
+            if (
+                name in {"ConnectError", "ConnectTimeout", "ReadTimeout"}
+                or "Connection refused" in message
+                or "Errno 111" in message
+                or "timed out" in message.lower()
+            ):
+                raise RuntimeError(
+                    f"iLO endpoint connection failed: {target.address}:{target.port} ({scheme.upper()}). "
+                    "Check reachability, port and protocol (typical iLO is HTTPS/443)."
+                ) from exc
+            raise
 
         if response.status_code >= 400:
             raise RuntimeError(f"Redfish HTTP {response.status_code}: {response.text[:200].strip()}")

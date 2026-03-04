@@ -129,6 +129,8 @@ def test_ui_collectors_form_shows_only_selected_type_fields() -> None:
     page = client.get("/ui/collectors")
     assert page.status_code == 200
     assert "id='collector-type-select'" in page.text
+    assert "id='collector-port-input'" in page.text
+    assert "data-default-port='443'" in page.text
     assert "data-collector-scope='winrm'" in page.text
     assert "data-collector-scope='ssh' style='display:none" in page.text
     assert "data-collector-scope='snmp' style='display:none" in page.text
@@ -685,6 +687,50 @@ def test_ilo_redfish_pull_with_mock() -> None:
     assert len(rows) == 2
     assert DummyClient.last_endpoint.endswith("/redfish/v1/Systems/1/LogServices/IML/Entries")
     assert DummyClient.last_params == {"$top": 20}
+
+
+
+def test_ilo_pull_reports_connection_refused_with_hint() -> None:
+    class DummyClient:
+        def __init__(self, timeout, verify, auth):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, endpoint, params=None):
+            raise RuntimeError("[Errno 111] Connection refused")
+
+    class DummyHttpx:
+        BasicAuth = staticmethod(lambda u, p: (u, p))
+        Client = DummyClient
+
+    sys.modules["httpx"] = DummyHttpx
+
+    client.post("/assets", json={"id": "bmc-err", "name": "bmc-err", "asset_type": "bmc", "location": "R8"})
+    target = main_module.service.upsert_collector_target(
+        main_module.CollectorTarget(
+            id="col-ilo-err",
+            name="ilo err",
+            address="10.0.0.60",
+            collector_type=main_module.CollectorType.ilo,
+            port=5985,
+            username="admin",
+            password="secret",
+            poll_interval_sec=30,
+            enabled=True,
+            asset_id="bmc-err",
+            ilo_use_https=True,
+        )
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        main_module.worker._pull_ilo_redfish_events(target, None)
+
+    assert "typical iLO is HTTPS/443" in str(exc.value)
 
 def test_worker_health_endpoint() -> None:
     resp = client.get("/worker/health")
