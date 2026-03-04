@@ -3128,10 +3128,10 @@ def _build_dashboard_payload(
 
     trend_counts: Counter[str] = Counter()
     for e in filtered_events:
-        month = str(e.timestamp)[:7]
-        trend_counts[month] += 1
-    trend_labels = sorted(trend_counts.keys())[-6:]
-    trend_values = [trend_counts[m] for m in trend_labels]
+        day = e.timestamp.date().isoformat()
+        trend_counts[day] += 1
+    trend_labels = sorted(trend_counts.keys())
+    trend_values = [trend_counts[day] for day in trend_labels]
 
     filtered_asset_counts = Counter(e.asset_id for e in filtered_events)
 
