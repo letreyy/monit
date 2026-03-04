@@ -5,6 +5,8 @@ import hmac
 import time
 import hashlib
 import base64
+import re
+import html
 from pathlib import Path
 from datetime import datetime, timedelta
 from collections import Counter, deque
@@ -15,7 +17,7 @@ from urllib.error import URLError
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, StreamingResponse, JSONResponse, Response
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -96,6 +98,259 @@ COMPLIANCE_REPORT_INTERVAL_SEC = int(os.getenv("COMPLIANCE_REPORT_INTERVAL_SEC",
 COMPLIANCE_REPORT_RETENTION = int(os.getenv("COMPLIANCE_REPORT_RETENTION", "100"))
 COMPLIANCE_WEBHOOK_URL = os.getenv("COMPLIANCE_WEBHOOK_URL", "")
 COMPLIANCE_EMAIL_TO = os.getenv("COMPLIANCE_EMAIL_TO", "")
+
+
+_BOOTSTRAP_THEME_HEAD = """
+<link rel='preconnect' href='https://fonts.googleapis.com'>
+<link rel='preconnect' href='https://fonts.gstatic.com' crossorigin>
+<link href='https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap' rel='stylesheet'>
+<!-- human-ui-theme-v1 -->
+<style>
+  :root {
+    --bg: #f3f5f9;
+    --surface: #ffffff;
+    --surface-soft: #f8fafc;
+    --text: #0f172a;
+    --muted: #475569;
+    --line: #dde3ea;
+    --accent: #2563eb;
+    --accent-2: #7c3aed;
+    --ok: #059669;
+    --warn: #d97706;
+    --danger: #dc2626;
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 10px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body, body[style] {
+    margin: 0 !important;
+    max-width: none !important;
+    width: 100% !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    color: var(--text) !important;
+    background:
+      radial-gradient(circle at top right, rgba(37, 99, 235, .08), transparent 35%),
+      radial-gradient(circle at left -10%, rgba(124, 58, 237, .07), transparent 38%),
+      var(--bg) !important;
+    min-height: 100vh;
+    line-height: 1.45;
+  }
+
+  #human-ui-shell {
+    width: 100%;
+    margin: 0;
+  }
+
+  .human-topbar {
+    background: #344452;
+    color: #fff;
+    padding: 14px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .human-topbar .brand { font-weight: 700; }
+
+  .human-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .45rem;
+  }
+
+  .human-nav a {
+    color: #dce6ee;
+    text-decoration: none;
+    font-size: 14px;
+    padding: .2rem .38rem;
+    border-radius: 6px;
+  }
+
+  .human-nav a:hover {
+    background: rgba(255,255,255,.12);
+    text-decoration: none;
+    color: #fff;
+  }
+
+  .human-nav a.active {
+    background: rgba(255,255,255,.2);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .human-content {
+    width: 100%;
+    min-width: 0;
+    padding: .9rem;
+  }
+
+  .human-page-header {
+    border-radius: 14px;
+    color: #fff;
+    padding: 1.15rem 1.2rem;
+    background: linear-gradient(120deg, #1e293b, #334155 55%, #475569);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, .26);
+    margin-bottom: 1rem;
+  }
+
+  .human-page-header .kicker { margin: 0 0 .32rem; opacity: .8; font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; }
+  .human-page-header h1 { margin: 0; color: #fff; font-size: clamp(1.3rem, 2.4vw, 1.9rem); }
+
+  .human-page-body > .container,
+  .human-page-body > div.wrap,
+  .human-page-body > div,
+  .human-page-body > main {
+    max-width: 100% !important;
+    margin: 0 0 .9rem !important;
+  }
+
+  h1, h2, h3, h4 { color: #0b1220; letter-spacing: -.01em; }
+  p, li, td, th, label, span { color: inherit; }
+
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { color: #1d4ed8; text-decoration: underline; }
+
+  .human-page-body > *,
+  div[style*='background:#fff;border:1px solid #d8dee4'],
+  form,
+  table,
+  pre,
+  .card {
+    border: 1px solid var(--line) !important;
+    background: var(--surface) !important;
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 8px 22px rgba(15, 23, 42, .06);
+  }
+
+  .human-page-body > * { padding: .95rem; }
+
+  form { padding: 1rem !important; }
+  label { font-size: .9rem; font-weight: 600; color: #1e293b; }
+
+  input, select, textarea {
+    border: 1px solid #cfd8e3 !important;
+    border-radius: var(--radius-sm) !important;
+    background: #fff !important;
+    color: var(--text) !important;
+    padding: .55rem .72rem !important;
+    font: inherit;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 .2rem rgba(37,99,235,.16) !important;
+    outline: none;
+  }
+
+  button, .btn, button[type='submit'] {
+    border-radius: 10px !important;
+    border: 1px solid var(--accent) !important;
+    background: linear-gradient(130deg, var(--accent), #1d4ed8) !important;
+    color: #fff !important;
+    padding: .48rem .86rem !important;
+    font-weight: 600;
+  }
+
+  button:hover, .btn:hover, button[type='submit']:hover {
+    background: linear-gradient(130deg, #1d4ed8, #1e40af) !important;
+    text-decoration: none !important;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    overflow: hidden;
+  }
+
+  table thead th {
+    background: var(--surface-soft);
+    color: #334155;
+    font-weight: 700;
+  }
+
+  table th, table td {
+    padding: .65rem .72rem;
+    border-bottom: 1px solid #eef2f7;
+    vertical-align: middle;
+  }
+
+  @media (max-width: 980px) {
+    .human-topbar { padding: 12px 14px; }
+    .human-content { padding: .6rem; }
+  }
+</style>
+"""
+
+def _inject_bootstrap_theme(html_text: str) -> str:
+    if "human-ui-theme-v1" in html_text:
+        return html_text
+    if "</head>" in html_text:
+        return html_text.replace("</head>", f"{_BOOTSTRAP_THEME_HEAD}</head>", 1)
+    if "<html>" in html_text:
+        return html_text.replace("<html>", f"<html><head>{_BOOTSTRAP_THEME_HEAD}</head>", 1)
+    return html_text
+
+
+def _inject_human_shell(html_text: str, current_path: str) -> str:
+    if "id='human-ui-shell'" in html_text:
+        return html_text
+
+    routes = [
+        ("/dashboard", "Dashboard", ""),
+        ("/ui/events", "Events", ""),
+        ("/ui/assets", "Assets", ""),
+        ("/ui/collectors", "Collectors", "nav-collectors"),
+        ("/ui/ai", "AI Analytics", ""),
+        ("/ui/ai/policies", "AI Policies", ""),
+        ("/ui/compliance", "Compliance", ""),
+        ("/ui/auth", "Auth", ""),
+        ("/ui/csb-merp", "CSB MERP", ""),
+        ("/ui/diagnostics", "Diagnostics", "nav-diagnostics"),
+    ]
+
+    nav_links_parts: list[str] = []
+    for href, label, link_id in routes:
+        active = "active" if current_path == href else ""
+        id_attr = f" id='{link_id}'" if link_id else ""
+        nav_links_parts.append(f"<a{id_attr} href='{href}' class='{active}'>{label}</a>")
+    nav_links = "".join(nav_links_parts)
+
+    titles = {
+        "/": "Главная",
+        "/dashboard": "Dashboard",
+        "/ui/events": "События",
+        "/ui/assets": "Активы",
+        "/ui/collectors": "Коллекторы",
+        "/ui/ai": "AI аналитика",
+        "/ui/ai/policies": "Политики AI",
+        "/ui/compliance": "Соответствие",
+        "/ui/auth": "Доступ",
+        "/ui/csb-merp": "CSB MERP",
+        "/ui/diagnostics": "Диагностика",
+    }
+    page_title = titles.get(current_path, "Мониторинг")
+
+    body_open = (
+        "<div id='human-ui-shell'>"
+        "<div class='human-topbar'><div class='brand'><b>InfraMind Monitor</b></div>"
+        f"<div class='human-nav'>{nav_links}</div></div>"
+        "<section class='human-content'>"
+        "<header class='human-page-header'><p class='kicker'>Инфраструктурный мониторинг</p>"
+        f"<h1>{page_title}</h1></header>"
+        "<div class='human-page-body'>"
+    )
+    body_close = "</div></section></div>"
+
+    html_text = re.sub(r"(<body[^>]*>)", r"\1" + body_open, html_text, count=1, flags=re.IGNORECASE)
+    html_text = re.sub(r"</body>", body_close + "</body>", html_text, count=1, flags=re.IGNORECASE)
+    return html_text
 
 
 def _load_auth_token_roles() -> dict[str, str]:
@@ -485,6 +740,26 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="InfraMind Monitor API", version="0.9.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def bootstrap_theme_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static") or request.url.path.startswith("/docs") or request.url.path.startswith("/redoc") or request.url.path.startswith("/openapi"):
+        return response
+    content_type = response.headers.get("content-type", "")
+    if "text/html" not in content_type.lower():
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    html_text = body.decode("utf-8", errors="ignore")
+    themed = _inject_bootstrap_theme(html_text)
+    themed = _inject_human_shell(themed, request.url.path)
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    return Response(content=themed, status_code=response.status_code, headers=headers, media_type="text/html")
+
+
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
 
@@ -958,40 +1233,76 @@ def ui_assets(edit_id: str = "") -> str:
     edit_asset = next((item for item in assets if item.id == edit_id.strip()), None)
     is_edit = edit_asset is not None
 
+    def esc(value: str | None) -> str:
+        return html.escape(value or "", quote=True)
+
     rows = []
     for asset in assets:
+        location_cell = esc(asset.location) if asset.location else "<span style='color:#64748b'>—</span>"
         rows.append(
-            f"<tr><td><a href='/ui/assets/{asset.id}'>{asset.id}</a></td><td>{asset.name}</td>"
-            f"<td>{asset.asset_type.value}</td><td>{asset.location or '-'}</td>"
-            f"<td><a href='/ui/assets?edit_id={asset.id}'>Edit</a> | <form method='post' action='/ui/assets/{asset.id}/delete' style='margin:0;display:inline'>"
-            f"<button type='submit'>Delete</button></form></td></tr>"
+            "<tr>"
+            f"<td><a class='asset-link' href='/ui/assets/{esc(asset.id)}'>{esc(asset.id)}</a></td>"
+            f"<td>{esc(asset.name)}</td>"
+            f"<td><span>{esc(asset.asset_type.value)}</span></td>"
+            f"<td>{location_cell}</td>"
+            "<td>"
+            f"<a class='btn' href='/ui/assets?edit_id={esc(asset.id)}'>Edit</a>"
+            f"<form method='post' action='/ui/assets/{esc(asset.id)}/delete' style='margin:0'>"
+            "<button type='submit' style='background:#dc2626;border-color:#dc2626'>Delete</button>"
+            "</form>"
+            "</td></tr>"
         )
-    rows_html = "".join(rows) if rows else "<tr><td colspan='5'>No assets yet</td></tr>"
+    rows_html = "".join(rows) if rows else "<tr><td colspan='5' style='text-align:center;color:#64748b'>No assets yet</td></tr>"
+
+    form_title = "Edit asset" if is_edit else "Create asset"
+    submit_text = "Update asset" if is_edit else "Save asset"
+    cancel_edit = "<a href='/ui/assets' class='btn' style='background:#64748b;border-color:#64748b'>Cancel edit</a>" if is_edit else ""
+    id_input_attrs = "readonly" if is_edit else ""
 
     return f"""
-    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 980px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
-      <h1>Assets</h1>
-      <p><a href='/dashboard'>← Dashboard</a> | <a href='/ui/ai'>AI analytics</a></p>
-      <form method='post' action='/ui/assets' style='background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:16px'>
-        <label>ID <input name='asset_id' value='{edit_asset.id if edit_asset else ''}' {'readonly' if is_edit else ''} required /></label><br/><br/>
-        <label>Name <input name='name' value='{edit_asset.name if edit_asset else ''}' required /></label><br/><br/>
-        <label>Type
-          <select name='asset_type'>
-            <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
-            <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
-            <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
-            <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
-          </select>
-        </label><br/><br/>
-        <label>Location <input name='location' value='{edit_asset.location or '' if edit_asset else ''}'/></label><br/><br/>
-        <button type='submit'>{'Update asset' if is_edit else 'Save asset'}</button> {"<a href='/ui/assets' style='margin-left:10px'>Cancel edit</a>" if is_edit else ''}
-      </form>
-      <h2>Registered assets</h2>
-      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
-        <thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr></thead>
-        <tbody>{rows_html}</tbody>
-      </table>
-    </body></html>
+    <html>
+    <head>
+      <meta charset='utf-8' />
+      <meta name='viewport' content='width=device-width, initial-scale=1' />
+      <title>Assets · InfraMind Monitor</title>
+    </head>
+    <body>
+      <main>
+        <section>
+          <h2>{form_title}</h2>
+          <form method='post' action='/ui/assets'>
+            <p><label>ID</label><input name='asset_id' value='{esc(edit_asset.id if edit_asset else '')}' {id_input_attrs} required /></p>
+            <p><label>Name</label><input name='name' value='{esc(edit_asset.name if edit_asset else '')}' required /></p>
+            <p>
+              <label>Type</label>
+              <select name='asset_type'>
+                <option value='server' {'selected' if edit_asset and edit_asset.asset_type == AssetType.server else ''}>server</option>
+                <option value='storage_shelf' {'selected' if edit_asset and edit_asset.asset_type == AssetType.storage_shelf else ''}>storage_shelf</option>
+                <option value='network' {'selected' if edit_asset and edit_asset.asset_type == AssetType.network else ''}>network</option>
+                <option value='bmc' {'selected' if edit_asset and edit_asset.asset_type == AssetType.bmc else ''}>bmc</option>
+              </select>
+            </p>
+            <p><label>Location</label><input name='location' value='{esc(edit_asset.location if edit_asset else '')}' /></p>
+            <p>
+              <button type='submit'>{submit_text}</button>
+              {cancel_edit}
+            </p>
+          </form>
+        </section>
+
+        <section>
+          <h2>Registered assets</h2>
+          <p><b>{len(assets)}</b> total assets</p>
+          <table>
+            <thead>
+              <tr><th>ID</th><th>Name</th><th>Type</th><th>Location</th><th>Actions</th></tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </section>
+      </main>
+    </body>
+    </html>
     """
 
 
@@ -1039,7 +1350,7 @@ def ui_asset_detail(asset_id: str) -> str:
     actions = "".join(f"<li>{a}</li>" for a in rec.actions)
 
     return f"""
-    <html><body style='font-family: Inter, Arial, sans-serif; max-width: 1100px; margin: 2rem auto; background:#f3f5f7; color:#111827;'>
+    <html><body>
       <h1>Asset detail: {asset.id}</h1>
       <p><a href='/ui/assets'>← Back to assets</a> | <a href='/dashboard'>Dashboard</a> | <a href='/ui/ai?asset_id={asset.id}'>AI analytics</a></p>
       <p><b>Name:</b> {asset.name} | <b>Type:</b> {asset.asset_type.value} | <b>Location:</b> {asset.location or '-'}</p>
@@ -1049,7 +1360,7 @@ def ui_asset_detail(asset_id: str) -> str:
       <h2>Correlation insights</h2>
       <ul>{insights_rows}</ul>
       <h2>Recent events</h2>
-      <table border='0' cellpadding='8' cellspacing='0' style='width:100%;background:#fff;border:1px solid #d8dee4;border-radius:10px'>
+      <table>
         <thead><tr><th>Timestamp</th><th>Source</th><th>Severity</th><th>Message</th></tr></thead>
         <tbody>{event_rows}</tbody>
       </table>
