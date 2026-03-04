@@ -1371,26 +1371,68 @@ def ui_asset_detail(asset_id: str, correlation: str = "") -> str:
 
     asset = assets[0]
     correlation_query = correlation.strip()
-    correlation_matchers: dict[str, Callable[[str], bool]] = {
-        "Repeated unexpected shutdown pattern": lambda message: "eventid=6008" in message or "eventid=41" in message,
-        "Burst of failed logons": lambda message: "eventid=4625" in message,
-        "Windows storage error cluster": lambda message: bool(re.search(r"eventid=(7|51|55|153)", message)),
+
+    # Each matcher: (message_predicate, allowed_sources or None for any)
+    correlation_matchers: dict[str, tuple[Callable[[str], bool], set[str] | None]] = {
+        # Windows Event Log correlations
+        "Repeated unexpected shutdown pattern": (
+            lambda message: "eventid=6008" in message or "eventid=41" in message,
+            {"windows_eventlog"},
+        ),
+        "Burst of failed logons": (
+            lambda message: "eventid=4625" in message,
+            {"windows_eventlog"},
+        ),
+        "Windows storage error cluster": (
+            lambda message: bool(re.search(r"eventid=(7|51|55|153)", message)),
+            {"windows_eventlog"},
+        ),
+        # iLO IML correlations
+        "iLO thermal/fan alert pattern": (
+            lambda message: any(kw in message for kw in ("fan", "thermal", "temperature", "overheating", "caution")),
+            {"ilo_iml"},
+        ),
+        "iLO power supply fault": (
+            lambda message: any(kw in message for kw in ("power supply", "power fault", "power failure", "redundan")),
+            {"ilo_iml"},
+        ),
+        "iLO storage degradation pattern": (
+            lambda message: any(kw in message for kw in ("drive", "disk", "smart", "storage", "array", "logical drive", "physical drive")),
+            {"ilo_iml"},
+        ),
     }
 
-    selected_matcher = correlation_matchers.get(correlation_query)
-    if selected_matcher:
+    selected_entry = correlation_matchers.get(correlation_query)
+    if selected_entry:
+        selected_matcher, allowed_sources = selected_entry
         all_events = service.list_events(asset_id, limit=10000)
-        events = [e for e in all_events if e.source == "windows_eventlog" and selected_matcher(e.message.lower())]
+        events = [
+            e for e in all_events
+            if (allowed_sources is None or e.source in allowed_sources)
+            and selected_matcher(e.message.lower())
+        ]
     else:
+        selected_matcher = None
         events = service.list_events(asset_id, limit=20)
     event_rows = "".join(
         f"<tr><td>{e.timestamp}</td><td>{html.escape(e.source)}</td><td>{e.severity.value}</td><td>{html.escape(e.message)}</td></tr>" for e in events
     ) or "<tr><td colspan='4'>No events yet</td></tr>"
 
     insights = service.build_correlation_insights(asset_id)
-    insights_rows = "".join(
-        f"<li><b>{i.title}</b> ({i.confidence}) — {i.recommendation}</li>" for i in insights
-    ) or "<li>No insights yet</li>"
+    insights_items: list[str] = []
+    for i in insights:
+        params_i = f"correlation={quote_plus(i.title)}"
+        if selected_matcher and i.title == correlation_query:
+            insights_items.append(
+                f"<li><b>{html.escape(i.title)}</b> ({i.confidence}) — {html.escape(i.recommendation)} "
+                f"<a href='/ui/assets/{quote_plus(asset.id)}' style='margin-left:6px;font-size:0.85em'>сбросить</a></li>"
+            )
+        else:
+            insights_items.append(
+                f"<li><a href='/ui/assets/{quote_plus(asset.id)}?{params_i}'>"
+                f"<b>{html.escape(i.title)}</b></a> ({i.confidence}) — {html.escape(i.recommendation)}</li>"
+            )
+    insights_rows = "".join(insights_items) or "<li>No insights yet</li>"
 
     rec = service.build_recommendation(asset_id)
     correlation_action_re = re.compile(r"^Correlation: (?P<title>.+) \((?P<count>\d+) events\)$")
@@ -1441,6 +1483,7 @@ def ui_asset_detail(asset_id: str, correlation: str = "") -> str:
       </table>
     </body></html>
     """
+
 
 
 

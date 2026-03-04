@@ -401,20 +401,22 @@ class AgentlessWorker:
 
         events: list[Event] = []
         for row in rows:
-            sev_raw = str(row.get("Severity", "")).lower()
+            if not isinstance(row, dict):
+                continue
+            sev_raw = str(row.get("Severity") or row.get("severity") or row.get("Oem", {}).get("Severity", "") or "").lower()
             severity = Severity.info
             if "warn" in sev_raw or "caution" in sev_raw:
                 severity = Severity.warning
             if "crit" in sev_raw or "fatal" in sev_raw:
                 severity = Severity.critical
-            entry_id = row.get("Id") or row.get("EntryCode") or "unknown"
-            created = row.get("Created") or row.get("CreatedTime") or ""
-            message = row.get("Message") or row.get("Name") or "iLO log entry"
+            entry_id = row.get("Id") or row.get("Number") or row.get("RecordId") or row.get("EntryCode") or "unknown"
+            created = row.get("Created") or row.get("CreatedTime") or row.get("created") or ""
+            message = row.get("Message") or row.get("Name") or row.get("Description") or row.get("MessageId") or "iLO log entry"
             events.append(
                 Event(
                     asset_id=target.asset_id,
                     source="ilo_iml",
-                    message=f"[iLO] Entry={entry_id} Created={created} Severity={row.get('Severity', 'Unknown')} :: {message}",
+                    message=f"[iLO] Entry={entry_id} Created={created} Severity={row.get('Severity', row.get('severity', 'Unknown'))} :: {message}",
                     severity=severity,
                 )
             )
@@ -1003,9 +1005,30 @@ $events | ConvertTo-Json -Depth 4 -Compress
 
         members = payload.get("Members") if isinstance(payload, dict) else None
         if not isinstance(members, list):
-            alt_members = payload.get("Items") or payload.get("items") or payload.get("value")
-            members = alt_members if isinstance(alt_members, list) else []
+            # Try alternative field names used by various iLO / Redfish versions
+            for alt_key in ("Items", "items", "value", "members"):
+                alt_members = payload.get(alt_key)
+                if isinstance(alt_members, list):
+                    members = alt_members
+                    break
+        if not isinstance(members, list):
+            # Some iLO4 returns entries under links.Member or link.Member
+            for link_key in ("links", "link", "Links"):
+                link_block = payload.get(link_key)
+                if isinstance(link_block, dict):
+                    for member_key in ("Member", "Members", "member", "members"):
+                        link_members = link_block.get(member_key)
+                        if isinstance(link_members, list):
+                            members = link_members
+                            break
+                    if isinstance(members, list):
+                        break
         rows = members if isinstance(members, list) else []
+
+        # If payload is the entries collection itself but Members is empty/missing,
+        # check if this is actually a single-entry response with log fields directly.
+        if not rows and ("Message" in payload or "Severity" in payload or "Name" in payload):
+            rows = [payload]
 
         # Some iLO Redfish implementations return collection members as links only
         # (e.g. {"@odata.id": ".../Entries/<N>"}). Hydrate those links to get event fields.
@@ -1013,8 +1036,6 @@ $events | ConvertTo-Json -Depth 4 -Compress
             isinstance(r, dict)
             and "@odata.id" in r
             and "Message" not in r
-            and "Severity" not in r
-            and "Id" not in r
             for r in rows
         )
         if needs_hydration:
@@ -1028,7 +1049,7 @@ $events | ConvertTo-Json -Depth 4 -Compress
                     auth=httpx.BasicAuth(target.username, target.password),
                 ) as client:
                     for item in rows[:request_limit]:
-                        ref = str(item.get("@odata.id") or "").strip()
+                        ref = str(item.get("@odata.id") or item.get("href") or "").strip()
                         if not ref.startswith("/"):
                             continue
                         try:
@@ -1045,20 +1066,59 @@ $events | ConvertTo-Json -Depth 4 -Compress
             if hydrated:
                 rows = hydrated
 
+        # If initial request with $top returned empty members, retry without $top
+        # (some iLO firmware doesn't support OData query parameters).
+        if not rows and request_limit > 0:
+            try:
+                with httpx.Client(
+                    timeout=self.timeout_sec,
+                    verify=target.ilo_validate_tls,
+                    auth=httpx.BasicAuth(target.username, target.password),
+                ) as client:
+                    retry_resp = client.get(endpoint)
+                    if retry_resp.status_code < 400:
+                        retry_payload = retry_resp.json()
+                        if isinstance(retry_payload, dict):
+                            for k in ("Members", "Items", "items", "value", "members"):
+                                alt = retry_payload.get(k)
+                                if isinstance(alt, list) and alt:
+                                    rows = alt
+                                    break
+            except Exception:
+                pass
+
+        # ── Extract numeric entry ID from various field names ──
+        def _extract_row_id(row: dict) -> int | None:
+            for field in ("Id", "Number", "RecordId", "EntryId"):
+                raw = row.get(field)
+                if raw is not None:
+                    try:
+                        return int(str(raw).strip().rstrip("."))
+                    except (ValueError, TypeError):
+                        continue
+            return None
+
         cursor = int(last_cursor) if (last_cursor and str(last_cursor).isdigit()) else 0
         filtered: list[dict] = []
         max_cursor = cursor
         for row in rows:
-            raw_id = row.get("Id")
-            row_id = None
-            try:
-                row_id = int(str(raw_id))
-            except Exception:
-                pass
+            row_id = _extract_row_id(row) if isinstance(row, dict) else None
             if row_id is None or row_id > cursor:
                 filtered.append(row)
             if row_id is not None:
                 max_cursor = max(max_cursor, row_id)
+
+        # Fallback: if no numeric IDs were found at all, use timestamp-based cursor
+        # to avoid re-ingesting the same entries on every poll.
+        if max_cursor == 0 and filtered:
+            ts_strings: list[str] = []
+            for row in filtered:
+                ts = str(row.get("Created") or row.get("CreatedTime") or row.get("created") or "").strip()
+                if ts:
+                    ts_strings.append(ts)
+            if ts_strings:
+                max_cursor_str = max(ts_strings)
+                return filtered, max_cursor_str
 
         return filtered, str(max_cursor)
 

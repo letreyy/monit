@@ -592,6 +592,55 @@ class MonitoringService:
                 )
             )
 
+        # ── iLO IML event correlations ──────────────────────────────────
+        ilo_events = [e for e in events if e.source == "ilo_iml"]
+        ilo_messages = [e.message.lower() for e in ilo_events]
+
+        thermal_fan_matches = sum(
+            1 for m in ilo_messages
+            if any(kw in m for kw in ("fan", "thermal", "temperature", "overheating", "caution"))
+        )
+        if thermal_fan_matches >= 2:
+            insights.append(
+                CorrelationInsight(
+                    asset_id=asset_id,
+                    title="iLO thermal/fan alert pattern",
+                    confidence=0.84,
+                    evidence_count=thermal_fan_matches,
+                    recommendation="Проверить вентиляторы, термопасту и airflow в серверной стойке.",
+                )
+            )
+
+        psu_matches = sum(
+            1 for m in ilo_messages
+            if any(kw in m for kw in ("power supply", "power fault", "power failure", "redundan"))
+        )
+        if psu_matches >= 1:
+            insights.append(
+                CorrelationInsight(
+                    asset_id=asset_id,
+                    title="iLO power supply fault",
+                    confidence=0.90,
+                    evidence_count=psu_matches,
+                    recommendation="Проверить блоки питания, кабели, и модули UPS; заменить неисправный PSU.",
+                )
+            )
+
+        ilo_disk_matches = sum(
+            1 for m in ilo_messages
+            if any(kw in m for kw in ("drive", "disk", "smart", "storage", "array", "logical drive", "physical drive"))
+        )
+        if ilo_disk_matches >= 2:
+            insights.append(
+                CorrelationInsight(
+                    asset_id=asset_id,
+                    title="iLO storage degradation pattern",
+                    confidence=0.82,
+                    evidence_count=ilo_disk_matches,
+                    recommendation="Проверить SMART-статус дисков, контроллер массива и подготовить замену диска.",
+                )
+            )
+
         return insights
 
     def build_log_runbook_hints(self, asset_id: str, limit: int = 300) -> LogAnalyticsRunbookHints:
